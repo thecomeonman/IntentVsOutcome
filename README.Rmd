@@ -3,11 +3,15 @@ title: "Finding passers with good awareness"
 output: md_document
 ---
 
-Using possession value to measure the value of the actions of players is a commonly seen statistic on Twitter now. These are usually on ball ations though. A question I've been thinking about is how can we value off ball actions.
+This is a thinking out loud kind of post. A bunch of basic charts and numbers are here which should be enough to give an idea of what I'm proposing. I want to think about this some more, which is usually a long and slow process because life gets in the way, before doing a version with nice looking vizes, etc. + also get feedback and comments from you guys.
 
-Using pitch control, we can estimate the probability of players controlling the ball in various parts of the pitch so we could simulate passes that didn't actually happen to estimate how much value a player _could_ have added from passes they _could_ have received. This is not the same as estimating the value of their off ball actions but more like an adjustment for the fact that not every player in the team will receive as many passes, good opportunities to pass to them might get missed because of reasons beyond their control, etc.
+# Introduction
 
-This is a thinking out loud kind of post. A bunch of charts and numbers are here, mostly self-explanatory so I haven't talked about some of them too much. The point is to get the idea across. I probably want to keep thinking about this some more before doing a version with nice looking vizes, etc.
+http://www.lukebornn.com/papers/fernandez_sloan_2019.pdf comes up with a probabilistic possession value based on combining the possession value of the part of the pitch, the probability of the ball being controlled in the part of the pitch from pitch control, and the probability of the ball being played to that part of the pitch from an action likelihood model. These numbers can then be used to infer passing tendencies, awareness, positioning, and many other things.
+
+We'll exclude action likelihood for now, because I want to fairly evaluate any opportunity across the pitch without 
+
+Pitch control and probably action likelihood are _outcome_ based models. Pitch control tells you the probability of controlling the ball if it were played to that part of the pitch. Action likelihood is also probably based on data from what _happened_ in actual matches. An additional aspect we need to model to evaluate things like player decision making is _intention_.
 
 ```{r setup, include=FALSE}
 
@@ -18,6 +22,7 @@ library(ggplot2)
 library(scales)
 library(CodaBonito)
 library(knitr)
+library(akima)
 
 knitr::opts_chunk$set(
    echo = F,
@@ -36,6 +41,7 @@ cRootDirectory = '~/Desktop/Data/Projects/Personal'
 nXSpan = 120
 nYSpan = 80
 nUpperLimitSpeed = 5 * 120 / 105
+nMaxPassLength = nXSpan * 2/3
 
 cGameName = 'Sample_Game_1'
 
@@ -90,87 +96,621 @@ dtPlayerLabels[,
    )
 ]
 
-TeamDeltaPVThreshold = 0.02
+AttackDeltaPVThreshold = 0.02
 PlayerDeltaPVThreshold = 0.01
 
+DataFrequency_hz = 25
 ```
 
 ```{r functions, echo=FALSE}
 
 
-  fGetEPV = function(
-    vnX,
-    vnY,
-    nXSpan = 120,
-    nYSpan = 80
+fGetEPV = function(
+  vnX,
+  vnY,
+  nXSpan = 120,
+  nYSpan = 80
+) {
+  
+  dtEPV = fread(
+      'https://raw.githubusercontent.com/Friends-of-Tracking-Data-FoTD/LaurieOnTracking/master/EPV_grid.csv',
+      header = F
+  )
+  
+  dtEPV[, y := .I]
+  dtEPV = melt(dtEPV, 'y')
+  setnames(dtEPV, 'variable','x')
+  dtEPV[, x := gsub(x, pattern = 'V', replacement = '')]
+  dtEPV[, x := as.integer(x)]
+  
+  # slightly corrupting the grid for better interpolation
+  dtEPV[, x := x - min(x)]
+  dtEPV[, y := y - min(y)]
+  dtEPV[, x := x * ( nXSpan - (1/(5*nXSpan)) )  / max(x)]
+  dtEPV[, y := y * ( nYSpan - (1/(5*nYSpan)) ) / max(y)]
+  
+  qwe = interp(
+     dtEPV[,x],
+     dtEPV[,y],
+     dtEPV[,value],
+     xo = seq(0, nXSpan - (1/(5*nXSpan)), length = ( 5 * nXSpan )),
+     yo = seq(0, nYSpan - (1/(5*nYSpan)), length = ( 5 * nYSpan )),
+     extrap = T, 
+  )
+  
+  dtEPV = data.table(t(qwe$z))
+  
+  vnEPVGridX = seq(0, nXSpan - (1/(5*nXSpan)), nXSpan/(ncol(dtEPV)))
+  vnEPVGridY = seq(0, nYSpan - (1/(5*nYSpan)), nYSpan/(nrow(dtEPV)))
+  
+  # vnEPVGridX[1] = vnEPVGridX[1] - 0.000000001
+  # vnEPVGridY[1] = vnEPVGridY[1] - 0.000000001
+  
+  vnX = vnX + (nXSpan/2)
+  vnY = vnY + (nYSpan/2)
+  
+  vnXIndex = 1 + ( vnX %/% (nXSpan/(ncol(dtEPV))) )
+  vnXIndex[vnXIndex <= 0] = 1L
+  vnXIndex[vnXIndex > ncol(dtEPV)] = ncol(dtEPV)
+  vnYIndex = 1 + ( vnY %/% (nYSpan/nrow(dtEPV)) )
+  vnYIndex[vnYIndex <= 0] = 1L
+  vnYIndex[vnYIndex > nrow(dtEPV)] = nrow(dtEPV)
+  
+  dtEPV[, Y := .I]
+  dtEPV = melt(dtEPV, 'Y')
+  dtEPV[, X := as.integer(gsub(variable, pattern = 'V', replacement = ''))]
+
+  merge(
+    data.table(X = vnXIndex, Y = vnYIndex)[, SNO := .I],
+    dtEPV,
+    c('X','Y'),
+    all.x = T
+  )[order(SNO), value]
+  
+}
+
+
+  fGetIntentValues = function(
+    lMetadata,
+    lPitchControl,
+    lData
   ) {
-    
-    dtEPV = fread(
-        'https://raw.githubusercontent.com/Friends-of-Tracking-Data-FoTD/LaurieOnTracking/master/EPV_grid.csv',
-        header = F
+
+    dtDetails = merge(
+        lPitchControl$dtDetails[, list(SNO, Frame, TargetX, TargetY)],
+        lPitchControl$dtTrackingSlice[
+          Player == 0, 
+          list(Frame, BallX = X, BallY = Y)
+        ],
+        'Frame'
     )
-
-    vnEPVGridX = seq(0, nXSpan, nXSpan/ncol(dtEPV))
-    vnEPVGridY = seq(0, nYSpan, nYSpan/nrow(dtEPV))
     
-    # vnEPVGridX[1] = vnEPVGridX[1] - 0.000000001
-    # vnEPVGridY[1] = vnEPVGridY[1] - 0.000000001
+    dtDetails = merge(
+        dtDetails,
+        lPitchControl$dtTrackingSlice[
+          TeamInPossession == T, 
+          list(Frame, Player, Tag, AttackingTeam, TeamInPossession, PlayerInPossession)
+        ],
+        'Frame',
+        allow.cartesian = T
+    )
     
-    vnX = vnX + (nXSpan/2)
-    vnY = vnY + (nYSpan/2)
+    dtDetails = merge(
+        dtDetails,
+        lPitchControl$dtTrackingSliceVectorised[
+          , 
+          list(SNO, Player, PlayerPPCF)
+        ],
+        c('SNO','Player')
+    )
     
-    vnX = 1 + ( vnX %/% (nXSpan/ncol(dtEPV)) )
-    vnX[vnX <= 0] = 1L
-    vnX[vnX > ncol(dtEPV)] = ncol(dtEPV)
-    vnY = 1 + ( vnY %/% (nYSpan/nrow(dtEPV)) )
-    vnY[vnY <= 0] = 1L
-    vnY[vnY > nrow(dtEPV)] = nrow(dtEPV)
+    if ( nrow(dtDetails) == 0 ) {
+        stop()
+    }
     
-    dtEPV[, Y := .I]
-    dtEPV = melt(dtEPV, 'Y')
-    dtEPV[, X := as.integer(gsub(variable, pattern = 'V', replacement = ''))]
-
-    merge(
-      data.table(X = vnX, Y = vnY)[, SNO := .I],
-      dtEPV,
-      c('X','Y')
-    )[order(SNO), value]
+    if ( lMetadata$cTeam == 'H' ) {
+        dtDetails[, AttackOriginPV := fGetEPV(BallX, BallY)]
+        dtDetails[, AttackTargetPV := fGetEPV(TargetX, TargetY)]
+        dtDetails[, DefenseTargetPV := fGetEPV(-TargetX, -TargetY)]
+    } else {
+        dtDetails[, AttackOriginPV := fGetEPV(-BallX, -BallY)]
+        dtDetails[, AttackTargetPV := fGetEPV(-TargetX, -TargetY)]
+        dtDetails[, DefenseTargetPV := fGetEPV(TargetX, TargetY)]
+    }
+    
+    dtDetailsAggregated = dtDetails[
+        , 
+        list(
+          AttackPPCF = sum(PlayerPPCF)
+        ),
+        list(
+          Frame,
+          Tag,
+          AttackingTeam,
+          TargetX,
+          TargetY,
+          BallX,
+          BallY,
+          AttackOriginPV,
+          AttackTargetPV,
+          DefenseTargetPV
+        )
+    ]
+    
+    
+    dtDetailsAggregated[
+        , 
+        AttackDeltaPV := (
+          (
+              ( AttackPPCF * AttackTargetPV ) -
+                ( ( 1 - AttackPPCF ) * ( DefenseTargetPV ) )
+          ) - (
+              1 * AttackOriginPV
+          )
+        )
+    ]
+    
+    
+    
+    # dtDetails[, 
+    #   PlayerDeltaPPCFContribution := ( PlayerPPCF / TeamPPCF ) * (2 * ( TeamPPCF - 0.5 ) ) 
+    # ]
+    dtDetailsAggregated[, Distance := ( ( (BallX - TargetX) ^ 2 ) + ( (BallY - TargetY) ^ 2 ) ) ^ 0.5]
+    dtDetailsAggregated[, DistanceSD := Distance / 30]
+    
+    if ( F ) {
+        dtDetailsAggregated = dtDetailsAggregated[
+          , 
+          data.table(expand.grid(
+              TargetXIntent = seq(
+                round(TargetX - (3*DistanceSD)),
+                round(TargetX + (3*DistanceSD)),
+                1
+              ),
+              TargetYIntent = seq(
+                round(TargetY - (3*DistanceSD)),
+                round(TargetY + (3*DistanceSD)),
+                1
+              )
+          )),
+          c(colnames(dtDetailsAggregated))
+        ]
+    }
+    
+    dtDetailsAggregated = merge(
+        dtDetailsAggregated,
+        dtDetailsAggregated[
+          which.max(DistanceSD), 
+          data.table(expand.grid(
+              TargetXIntent = seq(
+                round((-3*ceiling(DistanceSD))),
+                round((+3*ceiling(DistanceSD))),
+                1
+              ),
+              TargetYIntent = seq(
+                round((-3*ceiling(DistanceSD))),
+                round((+3*ceiling(DistanceSD))),
+                1
+              )
+          ))[, Frame := dtDetailsAggregated[1, Frame]]
+        ],
+        'Frame',
+        allow.cartesian = T
+    )
+    
+    dtDetailsAggregated[
+        ,
+        DistanceIntent := (
+          ( ( TargetXIntent ^ 2 ) + ( TargetYIntent ^ 2 ) ) ^ 0.5
+        )
+    ]
+    
+    dtDetailsAggregated = dtDetailsAggregated[
+        DistanceIntent <= ( 3 * DistanceSD ) + (sqrt(2)/2)
+    ]
+    
+    dtDetailsAggregated[, TargetXIntent := TargetX + TargetXIntent]
+    dtDetailsAggregated[, TargetYIntent := TargetY + TargetYIntent]
+    
+    if ( F ) {
+        
+        dtDetailsAggregated[
+          DistanceIntent <= DistanceSD - (sqrt(2)/2),
+          Intersection := 1
+        ]
+        
+        if ( F ) {
+          
+          fGetIntersection = function(
+              TargetX,
+              TargetY,
+              DistanceSD,
+              TargetXIntent,
+              TargetYIntent,
+              Resolution = 20
+          ) {
+              
+              # browser()
+              
+              qwe = cbind(
+                x = DistanceSD * sin(2*pi * seq(1,Resolution,1)/Resolution) + TargetX,
+                y = DistanceSD * cos(2*pi * seq(1,Resolution,1)/Resolution) + TargetY
+              )
+              qwe = rbind(qwe[nrow(qwe),], qwe)
+              asd = cbind(
+                x = TargetXIntent + c(-0.5,+0.5,+0.5,-0.5,-0.5),
+                y = TargetYIntent + c(+0.5,+0.5,-0.5,-0.5,+0.5)
+              )
+              
+              # plot(qwe)
+              # points(asd)
+              
+              s = st_sfc(
+                list(
+                    st_polygon(list(asd)),
+                    st_polygon(list(qwe))
+                )
+              )
+              zxc = st_intersection(s)
+              
+              st_area(data.frame(zxc)[1,]) / (st_area(data.frame(zxc)[1,]) + st_area(data.frame(zxc)[2,]))
+              
+          }
+          
+          dtDetailsAggregated[
+              is.na(Intersection),
+              Intersection := fGetIntersection(
+                TargetX[Tag == Tag[1]],
+                TargetY[Tag == Tag[1]],
+                pmax(0.01,DistanceSD[Tag == Tag[1]]),
+                TargetXIntent[Tag == Tag[1]],
+                TargetYIntent[Tag == Tag[1]]
+              ),
+              list(
+                Frame, TargetX, TargetY,TargetXIntent, TargetYIntent
+              )
+          ]
+          
+        } else if ( F ) {
+          
+          dtDetailsAggregated[
+              is.na(Intersection),
+              Intersection := fGetIntersection(
+                TargetX,
+                TargetY,
+                pmax(0.01,DistanceSD),
+                TargetXIntent,
+                TargetYIntent
+              )
+          ]
+          
+        }
+        
+    }
+    
+    dtDetailsAggregated[, PDF := dnorm(DistanceIntent,0,DistanceSD)]
+    dtDetailsAggregated[, PDF := PDF/sum(PDF), list(Frame, Tag, BallX, BallY, TargetX, TargetY)]
+    
+    dtDetailsAggregated = merge(
+        dtDetailsAggregated,
+        dtDetailsAggregated[, 
+                            list(AttackPPCFIntent = AttackPPCF[1]), 
+                            list(
+                              TargetXIntent = TargetX, 
+                              TargetYIntent = TargetY,
+                              Tag,
+                              Frame
+                            )
+        ],
+        c('Frame','Tag','TargetXIntent','TargetYIntent'),
+        all.x = T
+    )
+    
+    # should be out of bounds areas only
+    dtDetailsAggregated[
+        is.na(AttackPPCFIntent),
+        AttackPPCFIntent := 0
+    ]
+    
+    TRAngle = atan2(
+        (( nYSpan/2) - dtDetailsAggregated[1,BallY]),
+        (( nXSpan/2) - dtDetailsAggregated[1,BallX])
+    ) %% (2*pi)
+    
+    TLAngle = atan2(
+        (( nYSpan/2) - dtDetailsAggregated[1,BallY]),
+        ((-nXSpan/2) - dtDetailsAggregated[1,BallX])
+    ) %% (2*pi)
+    
+    BLAngle = atan2(
+        ((-nYSpan/2) - dtDetailsAggregated[1,BallY]),
+        ((-nXSpan/2) - dtDetailsAggregated[1,BallX])
+    ) %% (2*pi)
+    
+    BRAngle = atan2(
+        ((-nYSpan/2) - dtDetailsAggregated[1,BallY]),
+        (( nXSpan/2) - dtDetailsAggregated[1,BallX])
+    ) %% (2*pi)
+    
+    dtDetailsAggregated[
+        abs(TargetXIntent) > nXSpan/2 | abs(TargetYIntent) > nYSpan/2,
+        Angle := atan2(
+          (TargetYIntent - BallY),
+          (TargetXIntent - BallX)
+        ) %% (2*pi)
+    ]
+    
+    dtDetailsAggregated[
+        ( abs(TargetXIntent) > nXSpan/2 | abs(TargetYIntent) > nYSpan/2 ) &
+        Angle >= TRAngle & Angle < TLAngle,
+        Outside := 'T'
+    ]
+    
+    dtDetailsAggregated[
+        ( abs(TargetXIntent) > nXSpan/2 | abs(TargetYIntent) > nYSpan/2 ) &
+          Angle >= TLAngle & Angle < BLAngle,
+        Outside := 'L'
+    ]
+    
+    dtDetailsAggregated[
+        ( abs(TargetXIntent) > nXSpan/2 | abs(TargetYIntent) > nYSpan/2 ) &
+          Angle >= BLAngle & Angle < BRAngle,
+        Outside := 'B'
+    ]
+    
+    dtDetailsAggregated[
+        ( abs(TargetXIntent) > nXSpan/2 | abs(TargetYIntent) > nYSpan/2 ) &
+          (
+              Angle >= BRAngle & Angle < (2*pi) |
+              Angle >= 0 & Angle < TRAngle
+          ),
+        Outside := 'R'
+    ]
+    
+    # ggplot(dtDetailsAggregated[,.SD[1], list(TargetXIntent, TargetYIntent)]) + 
+    #    geom_point(aes(TargetXIntent, y = TargetYIntent, color = Outside)) +
+    #    geom_point(data = dtDetailsAggregated[1], aes(x = BallX, y = BallY), size = 3)
+    
+    if ( lMetadata$cTeam == 'H' ) {
+        
+        # ~goal kick
+        dtDetailsAggregated[
+          Outside == 'R',
+          c('TargetXIntent','TargetYIntent') := list(nXSpan/2,0)
+        ]
+        
+        # corners
+        dtDetailsAggregated[
+          ( Outside == 'L' & TargetYIntent < 0 ),
+          c('TargetXIntent','TargetYIntent') := list(-nXSpan/2,-nYSpan/2)
+        ]
+        
+        dtDetailsAggregated[
+          ( Outside == 'L' & TargetYIntent > 0 ),
+          c('TargetXIntent','TargetYIntent') := list(-nXSpan/2,nYSpan/2)
+        ]
+        
+    } else {
+        
+        # goal kick
+        dtDetailsAggregated[
+          Outside == 'L',
+          c('TargetXIntent','TargetYIntent') := list(-nXSpan/2,0)
+        ]
+        
+        # corners
+        dtDetailsAggregated[
+          ( Outside == 'R' & TargetYIntent < 0 ),
+          c('TargetXIntent','TargetYIntent') := list(nXSpan/2,-nYSpan/2)
+        ]
+        
+        dtDetailsAggregated[
+          ( Outside == 'R' & TargetYIntent > 0 ),
+          c('TargetXIntent','TargetYIntent') := list(nXSpan/2,nYSpan/2)
+        ]
+        
+    }
+    
+    dtDetailsAggregated[
+        Outside %in% c('T'),
+        TargetXIntent := (
+          ( TargetXIntent - BallX ) * 
+              ( ( nYSpan/2 ) - BallY ) / 
+              ( TargetYIntent - BallY )
+        ) + BallX
+    ]
+    
+    dtDetailsAggregated[
+        Outside %in% c('B'),
+        TargetXIntent := (
+          ( TargetXIntent - BallX ) * 
+              ( ( -nYSpan/2 ) - BallY ) / 
+              ( TargetYIntent - BallY )
+        ) + BallX
+    ]
+    
+    dtDetailsAggregated[
+        Outside %in% c('T','B') & TargetYIntent > nYSpan/2,
+        TargetXIntent := 0.5 + round(TargetXIntent - 0.5)
+    ]
+    
+    dtDetailsAggregated[
+        Outside %in% c('T'),
+        TargetYIntent := nYSpan/2
+    ]
+    
+    dtDetailsAggregated[
+        Outside %in% c('B'),
+        TargetYIntent := -nYSpan/2
+    ]
+    
+    if ( lMetadata$cTeam == 'H' ) {
+        
+        dtDetailsAggregated[
+          , 
+          AttackTargetPVIntent := fGetEPV(TargetXIntent, TargetYIntent),
+          # list(TargetXIntent, TargetYIntent)
+        ]
+        dtDetailsAggregated[
+          , 
+          DefenseTargetPVIntent := fGetEPV(-TargetXIntent, -TargetYIntent),
+          # list(TargetXIntent, TargetYIntent)
+        ]
+        
+    } else {
+        
+        dtDetailsAggregated[
+          , 
+          AttackTargetPVIntent := fGetEPV(-TargetXIntent, -TargetYIntent),
+          # list(TargetXIntent, TargetYIntent)
+        ]
+        dtDetailsAggregated[
+          , 
+          DefenseTargetPVIntent := fGetEPV(TargetXIntent, TargetYIntent),
+          # list(TargetXIntent, TargetYIntent)
+        ]
+        
+    }
+    
+    dtDetailsAggregated[
+        !is.na(Outside),    
+        AttackTargetPVIntent := 0
+    ]
+    
+    
+    dtDetailsAggregated = dtDetailsAggregated[
+        , 
+        list(
+          AttackDeltaPVIntent = sum(
+              PDF * (
+                (
+                    ( AttackPPCFIntent * AttackTargetPVIntent ) -
+                    ( ( 1 - AttackPPCFIntent ) * ( DefenseTargetPVIntent ) )
+                ) - (
+                    1 * AttackOriginPV
+                )
+              )
+          ),
+          AttackPPCFIntent = sum(PDF * AttackPPCFIntent),
+          AttackTargetPVIntent = sum(PDF * AttackTargetPVIntent),
+          DefenseTargetPVIntent = sum(PDF * DefenseTargetPVIntent),
+          CountIntent = .N
+        ),
+        list(
+          Frame,
+          Tag,
+          AttackingTeam,
+          TargetX,
+          TargetY,
+          BallX,
+          BallY,
+          AttackOriginPV,
+          AttackTargetPV,
+          DefenseTargetPV,
+          AttackPPCF,
+          AttackDeltaPV,
+          Distance,
+          DistanceSD
+        )
+    ]
+    
+    
+    dtDetailsAggregatedPlayer = rbind(
+        dtDetails[
+          Tag == lMetadata$cTeam, 
+          list(
+              PlayerPPCF = sum(PlayerPPCF)
+          ), 
+          list(
+              Frame,
+              Tag,
+              Player,
+              TargetX,
+              TargetY
+          )
+        ],
+        merge(
+          lData$dtTrackingData[
+              Frame %in% dtDetails[, Frame] &
+              !Player %in% dtDetails[, c(0, Player)] &
+              Tag == lMetadata$cTeam,
+              list(Frame, Player, Tag)
+          ],
+          dtDetails[
+              , 
+              list(
+                PlayerPPCF = 0
+              ), 
+              list(
+                Frame,
+                TargetX,
+                TargetY
+              )
+          ],
+          c('Frame'),
+          allow.cartesian = T
+        )
+    )
+    
+    dtDetailsAggregatedPlayer = merge(
+        dtDetailsAggregated,
+        dtDetailsAggregatedPlayer,
+        c('Frame','Tag','TargetX','TargetY'),
+        all = T
+    )
+    
+    dtDetailsAggregatedPlayer[
+        ,
+        PlayerDeltaPV := AttackDeltaPV * PlayerPPCF / AttackPPCF
+    ]
+    
+    # todo PlayerPPCFIntent / TeamPPCFIntent
+    dtDetailsAggregatedPlayer[
+        ,
+        PlayerPPCFIntent := AttackPPCFIntent * PlayerPPCF / AttackPPCF
+    ]
+    
+    dtDetailsAggregatedPlayer[
+        ,
+        PlayerDeltaPVIntent := AttackDeltaPVIntent * PlayerPPCFIntent / AttackPPCFIntent
+    ]
+    
+    
+    list(
+        dtDetailsAggregated = dtDetailsAggregated,
+        dtDetailsAggregatedPlayer = dtDetailsAggregatedPlayer
+    )
     
   }
+
 
 ```
 
 ```{r data, echo=FALSE}
 
-if ( F ) {
-      
-   lData = fParseTrackingDataBothTeams(
-      cRootPath = file.path(cRootDirectory,'/sample-data/data/'),
-      cGameName = cGameName,
-      nXSpan = nXSpan,
-      nYSpan = nYSpan,
-      xMaxBB = 1,
-      yMaxBB = 1,
-      nUpperLimitSpeed = nUpperLimitSpeed
-   )
-   
-}
+lData = fParseTrackingDataBothTeams(
+  cRootPath = file.path(cRootDirectory,'/sample-data/data/'),
+  cGameName = cGameName,
+  nXSpan = nXSpan,
+  nYSpan = nYSpan,
+  xMaxBB = 1,
+  yMaxBB = 1,
+  nUpperLimitSpeed = nUpperLimitSpeed
+)
 
-
-load(file.path(cRootDirectory, 'PassingAwareness/PVDelta.Rdata'))
+dtPVDelta = readRDS(file.path(cRootDirectory, 'PassingAwareness/PVDelta.Rdata'))
 
 dtPVDelta[, Team := Tag]
 dtPVDelta[Tag == 'A', BallX := -BallX]
 dtPVDelta[Tag == 'A', BallY := -BallY]
 dtPVDelta[Tag == 'A', PlayerMaxDeltaPVX := -PlayerMaxDeltaPVX]
 dtPVDelta[Tag == 'A', PlayerMaxDeltaPVY := -PlayerMaxDeltaPVY]
-dtPVDelta[Tag == 'A', TeamMaxDeltaPVX := -TeamMaxDeltaPVX]
-dtPVDelta[Tag == 'A', TeamMaxDeltaPVY := -TeamMaxDeltaPVY]
-
-dtPVDelta[Tag == 'A', PlayerMaxDeltaPVActualX := -PlayerMaxDeltaPVActualX]
-dtPVDelta[Tag == 'A', PlayerMaxDeltaPVActualY := -PlayerMaxDeltaPVActualY]
-dtPVDelta[Tag == 'A', TeamMaxDeltaPVActualX := -TeamMaxDeltaPVActualX]
-dtPVDelta[Tag == 'A', TeamMaxDeltaPVActualY := -TeamMaxDeltaPVActualY]
+dtPVDelta[Tag == 'A', AttackMaxDeltaPVX := -AttackMaxDeltaPVX]
+dtPVDelta[Tag == 'A', AttackMaxDeltaPVY := -AttackMaxDeltaPVY]
+dtPVDelta[Tag == 'A', PlayerMaxDeltaPVIntentX := -PlayerMaxDeltaPVIntentX]
+dtPVDelta[Tag == 'A', PlayerMaxDeltaPVIntentY := -PlayerMaxDeltaPVIntentY]
+dtPVDelta[Tag == 'A', AttackMaxDeltaPVIntentX := -AttackMaxDeltaPVIntentX]
+dtPVDelta[Tag == 'A', AttackMaxDeltaPVIntentY := -AttackMaxDeltaPVIntentY]
 
 ```
 
@@ -178,7 +718,9 @@ dtPVDelta[Tag == 'A', TeamMaxDeltaPVActualY := -TeamMaxDeltaPVActualY]
 
 ### Pitch Control
 
-Pitch control tells you the probability of a team and its players controlling the ball at various parts of the pitch if the ball were to be passed there. This is done for each instant of the game and changes based on the psitions of the players and their movement.
+Pitch control tells you the probability of a team and its players controlling the ball at various parts of the pitch if the ball were to be passed there. This is done for each instant of the game and changes based on the positions of the players and their movement. 
+
+I use Spearman's model but you could probably swap it out for any other model too.
 
 ### Possession Value
 
@@ -249,26 +791,32 @@ if ( F ) {
 
 ```
 
-We can rotate the pitch 180 degrees and get the PV values for the respective part of the pitch for the opposition for them attacking right to left.
+We can rotate the pitch 180 degrees and get the PV values for the respective part of the pitch for the opposition since that team is attacking right to left.
 
 Note how the probability sharply climbs close to 50% near the opposition goal but is quite low for most of the pitch.
+
+You should be able to swap it out for another PV model, if you so prefer.
+
+### Model 3
+
+I don't have a good model for this yet and don't know of o public one either. I will try and explain what I'm doing without this model for now. I can't say how much the results carry over when this model gets included though.
 
 ### Combining Pitch Control and Possession Value
 
 You should be able to combine these to evaluate what passing options offer progress to the team in possession.
 
-- The team in possession already has a certain PV depending on where they have the ball: `AttackingOriginPV`
-- The defending team is equally at risk of conceding a goal from that position, so the `DefendingingOriginPV = -AttackingOriginPV`
-- Assuming it is possible to pass to every point on the pitch, `(x,y)`, the PV for each target location can be calculated for both the teams, `AttackingTargetPV_xy` and `DefendingTargetPV_xy`
-- At every point on the pitch, `(x,y)`, the attacking team has a probability of keeping control of the ball, `AttackingTeamProbabilty_xy`, and therefore the defending team's probability is `DefendingTeamProbabilty_xy = 1 - AttackingTeamProbabilty_xy`
+- The team in possession already has a certain PV depending on where they have the ball: `AttackOriginPV`
+- The defending team is equally at risk of conceding a goal from that position, so the `DefenseOriginPV = -AttackOriginPV`
+- Assuming it is possible to pass to every point on the pitch, `(x,y)`, the PV for each target location can be calculated for both the teams, `AttackTargetPV_xy` and `DefenseTargetPV_xy`
+- At every point on the pitch, `(x,y)`, the attacking team has a probability of keeping control of the ball, `AttackProbabilty_xy`, and therefore the defending team's probability is `DefenseProbabilty_xy = 1 - AttackProbabilty_xy`
 - At every point, `(x,y)`, we can estimate an expected PV for playing a pass there:
-   - For the attacking team, `ExpectedAttackingTargetPV = ( AttackingTeamProbabilty_xy * AttackingTargetPV_xy ) - ( DefendingTeamProbabilty_xy * DefendingTargetPV_xy )`
-   - For the defending team, which is the same as the above formula with the attacking / defending terms exchanged, `ExpectedDefendingTargetPV = ( DefendingTeamProbabilty_xy * DefendingTargetPV_xy ) - ( AttackingTeamProbabilty_xy * AttackingTargetPV_xy )`
+   - For the attacking team, `ExpectedAttackTargetPV = ( AttackProbabilty_xy * AttackTargetPV_xy ) - ( DefenseProbabilty_xy * DefenseTargetPV_xy )`
+   - For the defending team, which is the same as the above formula with the attacking / defending terms exchanged, `ExpectedDefenseTargetPV = ( DefenseProbabilty_xy * DefenseTargetPV_xy ) - ( AttackProbabilty_xy * AttackTargetPV_xy )`
 - The change in PV from the current position can be calculated as the difference of the above terms from the PV of the starting position:
-    - For the attacking team, `ExpectedAttackingDeltaPV_xy = ExpectedAttackingTargetPV_xy - AttackingOriginPV`
-    - For the defending team, `ExpectedDefendingDeltaPV_xy = ExpectedDefendingTargetPV_xy - DefendingOriginPV`
+    - For the attacking team, `ExpectedAttackingDeltaPV_xy = ExpectedAttackTargetPV_xy - AttackOriginPV`
+    - For the defending team, `ExpectedDefenseingDeltaPV_xy = ExpectedDefenseTargetPV_xy - DefenseingOriginPV`
 
-Given we know the PV of each part of the pitch for both teams, and we know that the probability of controlling the ball for both teams must add up to 1 in each part of the pitch, we can calculate the minimum value `ExpectedAttackingTargetPV_xy` must be in each part of the pitch for it to compensate for `ExpectedDefendingDeltaPV_xy`, and therefore we can also calculate the minimum value `AttackingTeamProbabilty_xy` should be for `ExpectedAttackingTargetPV_xy` to attain the necessary value. Think of this value for `AttackingTeamProbabilty_xy` as a kind of breakeven probability. This is what those probabilities look like -
+Given we know the PV of each part of the pitch for both teams, and we know that the probability of controlling the ball for both teams must add up to 1 in each part of the pitch, we can calculate the minimum value `ExpectedAttackTargetPV_xy` must be in each part of the pitch for it to compensate for `ExpectedDefenseingDeltaPV_xy`, and therefore we can also calculate the minimum value `AttackProbabilty_xy` should be for `ExpectedAttackTargetPV_xy` to attain the necessary value. Think of this value for `AttackProbabilty_xy` as a kind of breakeven probability. This is what those probabilities look like -
 
 ```{r PVBreakEven, echo=FALSE}
 
@@ -292,11 +840,13 @@ Note how the breakeven probabilities are very low close to the opposition goal, 
 
 I also ignore the possibility of passes that travel more than 2/3 the length of the pitch. Only Ederson can make such passes. We consider the area that is within a radius of 2/3 length of the pitch at any point of time and ignore everything outside of it.
 
-We can expect `ExpectedDefendingDeltaPV_xy` to be positive very often, since `DefendingOriginPV` is a negative value so the more interesting thing to analyse would be `ExpectedAttackingDeltaPV_xy`. A positive `ExpectedAttackingDeltaPV_xy` implies that passing the ball to that point on the pitch is likely to increase the chance of scoring even after considering the risk of conceding the ball.
+We can expect `ExpectedDefenseDeltaPV_xy` to be positive very often, since `DefenseOriginPV` is a negative value so the more interesting thing to analyse would be `ExpectedAttackingDeltaPV_xy`. A positive `ExpectedAttackingDeltaPV_xy` implies that passing the ball to that point on the pitch is likely to increase the chance of scoring even after considering the risk of conceding the ball.
 
-## Illustration
+## Demonstration
 
-I chose this example because it also highlights the problem I mentioned above while hopefully also giving you an idea of the concept.
+### An Example Frame
+
+I use one frame to give an example of how all that I said above comes together. I chose this example because it also highlights the problem I mentioned above while hopefully also giving you an idea of the concept.
 
 ```{r IllustrationData, echo=FALSE}
 
@@ -372,7 +922,7 @@ dtDetails = merge(
   lPitchControl$dtDetails[, list(SNO, Frame, TargetX, TargetY)],
   lPitchControl$dtTrackingSlice[
       Player == 0, 
-      list(Frame, BallX = X, BallY = Y)
+      list(AttackingTeam, Frame, BallX = X, BallY = Y)
   ],
   'Frame'
 )
@@ -380,7 +930,7 @@ dtDetails = merge(
 dtDetails = merge(
   dtDetails,
   lPitchControl$dtTrackingSlice[, 
-      list(Frame, Player, Tag, AttackingTeam, TeamInPossession, PlayerInPossession)
+      list(Frame, Player, Tag, TeamInPossession, PlayerInPossession)
   ],
   'Frame',
   allow.cartesian = T
@@ -412,10 +962,9 @@ dtDetails[Tag == 'A', TeamTargetPV := fGetEPV(-TargetX, -TargetY)]
 dtDetails[Tag == 'H', OppositionTargetPV := fGetEPV(-TargetX, -TargetY)]
 dtDetails[Tag == 'A', OppositionTargetPV := fGetEPV(TargetX, TargetY)]
 
-
 dtDetailsAggregated = dtDetails[, 
   list(
-    TeamPPCF = sum(PlayerPPCF)
+    AttackPPCF = sum(PlayerPPCF)
   ),
   list(
     Frame,
@@ -431,9 +980,9 @@ dtDetailsAggregated = dtDetails[,
 ]
 
 dtDetailsAggregated[, 
-  TeamDeltaPV := (
-    ( TeamPPCF * TeamTargetPV ) -
-    ( ( 1 - TeamPPCF ) * ( OppositionTargetPV ) )
+  AttackDeltaPV := (
+    ( AttackPPCF * TeamTargetPV ) -
+    ( ( 1 - AttackPPCF ) * ( OppositionTargetPV ) )
   ) - (
     1 * OriginPV
   )
@@ -443,7 +992,7 @@ dtDetailsAggregated[,
 p1 = ggplot() + 
     geom_tile(
         data = dtDetailsAggregated[lPitchControl$dtTrackingSlice[1, AttackingTeam] == Tag],
-        aes(x = TargetX, y = TargetY, fill = TeamDeltaPV)
+        aes(x = TargetX, y = TargetY, fill = AttackDeltaPV)
     ) +
     geom_point(
         data = lPitchControl$dtTrackingSlice[Tag == 'B'],
@@ -463,7 +1012,7 @@ print(p1)
 
 ```
 
-There is some territory in the middle of the pitch where passing the ball is expected to return a positive `ExpectedAttackingDeltaPV_xy`. And then there is the tricky area near the opposition goal, which has a larger `ExpectedAttackingDeltaPV_xy` than the middle of the pitch. As a result of this problem, the logic above would suggest that in this situation the optimal action for the team in possession, the blue team, should be to pass the ball all the way to the goal.
+There is some territory in the middle of the pitch where passing the ball is expected to return a positive `ExpectedAttackingDeltaPV_xy`. And then there is the tricky area near the opposition goal, which has a larger `ExpectedAttackingDeltaPV_xy` than the middle of the pitch. As a result of this problem, the logic above would suggest that in this situation the optimal action for the team in possession, the blue team, should be to pass the ball all the way to the goal and hope that the small chance of another player from the same team controlling the ball pays off for the high reward you'd get from successfully controlling the ball at that location.
 
 ```{r EPVIllustationTeamOptimal, echo=FALSE}
 
@@ -471,7 +1020,7 @@ if ( F ) {
       
    p1 = p1 + 
       geom_tile(
-           data = dtDetailsAggregated[Tag == lPitchControl$dtTrackingSlice[1, AttackingTeam]][which.max(TeamDeltaPV)],
+           data = dtDetailsAggregated[Tag == lPitchControl$dtTrackingSlice[1, Attack]][which.max(AttackDeltaPV)],
            aes(
                x = TargetX,
                y = TargetY
@@ -485,11 +1034,11 @@ if ( F ) {
 
 ```
 
-## Observations
+### Full game 
 
-I'll use game 1 from Metrica Sports release available here - https://github.com/metrica-sports/sample-data/tree/master/data/Sample_Game_1 to show some uses for this approach.
+I'll use game 1 from Metrica Sports' release available here - https://github.com/metrica-sports/sample-data/tree/master/data/Sample_Game_1 to show some uses for this approach.
 
-### Team level
+#### Team - Distributions
 
 Let us look at the proportion of the pitch that offers a net gain in expected PV for the attacking team. This is simply checking how much of the area of the pitch offers a positive `ExpectedAttackingDeltaPV_xy` at each instant the team had possession of the ball.
 
@@ -500,42 +1049,41 @@ dtPositiveProportion = dtPVDelta[
 ][,
    .SD[1], 
    list(
-     Frame, 
-     AttackingTeam, 
+     Frame,
      Team
   )
 ][, 
    .N, 
-   list(AttackingTeam, Team, TeamPositiveProportion = round(floor(100*TeamPositiveProportion)/100,2))
+   list(Team, AttackPositiveProportion = round(floor(100*AttackPositiveProportion)/100,2))
 ][
-   order(AttackingTeam, Team,TeamPositiveProportion)
+   order(Team, AttackPositiveProportion)
 ][, 
    N_pct := N / sum(N), 
-   list(AttackingTeam, Team)
+   list(Team)
 ]
 
 dtPositiveProportion = merge(
    dtPositiveProportion[, 
       list(
-         TeamPositiveProportion = round(seq(
-            dtPositiveProportion[, min(TeamPositiveProportion)],
-            dtPositiveProportion[, max(TeamPositiveProportion)],
+         AttackPositiveProportion = round(seq(
+            dtPositiveProportion[, min(AttackPositiveProportion)],
+            dtPositiveProportion[, max(AttackPositiveProportion)],
             0.01
          ),2)
       ),
-      list(AttackingTeam, Team)
+      list(Team)
    ],
    dtPositiveProportion,
-   c('AttackingTeam', 'Team', 'TeamPositiveProportion'),
+   c('Team', 'AttackPositiveProportion'),
    all.x = T
 )
 
 dtPositiveProportion[is.na(N_pct), N_pct := 0]
-dtPositiveProportion[, Type := 'Ideal']
+dtPositiveProportion[, Type := 'Outcome']
 
 pPositiveProportion = ggplot(dtPositiveProportion) + 
-   geom_col(aes(x = TeamPositiveProportion, y = N_pct, fill = Team, group = Team), position = 'dodge') + 
-   # geom_point(aes(x = TeamPositiveProportion, y = N_pct, color = Team)) +
+   geom_col(aes(x = AttackPositiveProportion, y = N_pct, fill = Team, group = Team), position = 'dodge') + 
+   # geom_point(aes(x = AttackPositiveProportion, y = N_pct, color = Team)) +
    scale_colour_discrete(name = 'Team') +
    scale_y_continuous(labels = percent, name = 'Occurrence') +
    scale_x_continuous(labels = percent, name = 'Proportion of pitch area with a positive expected change in PV for the attacking team')
@@ -548,15 +1096,14 @@ dtPositiveProportion0 = dtPVDelta[
   .SD[1], 
   list(
       Frame, 
-      AttackingTeam, 
       Team
   )
 ][, 
   .N, 
-  list(AttackingTeam, Team, TeamPositiveProportionEq0 = TeamPositiveProportion == 0)
-][, N_pct := N / sum(N), AttackingTeam]
+  list(AttackingTeam, Team, AttackPositiveProportionEq0 = AttackPositiveProportion == 0)
+][, N_pct := N / sum(N), Team]
 
-dtPositiveProportion0 = dtPositiveProportion0[TeamPositiveProportionEq0 == T]
+dtPositiveProportion0 = dtPositiveProportion0[AttackPositiveProportionEq0 == T]
 
 ```
 
@@ -575,52 +1122,51 @@ dtPV = dtPVDelta[
    AttackingTeam == Team
 ][,
   list(
-     TeamDeltaPV = max(TeamDeltaPV)
+     AttackDeltaPV = max(AttackDeltaPV)
   ), 
   list(
      Frame, 
-     AttackingTeam, 
      Team
   )
 ][, 
   .N, 
-  list(AttackingTeam, Team, TeamDeltaPV = round(floor(TeamDeltaPV*100)/100,2))
+  list(Team, AttackDeltaPV = round(floor(AttackDeltaPV*100)/100,2))
 ][
-   order(AttackingTeam, Team, TeamDeltaPV)
+   order(Team, AttackDeltaPV)
 ][, 
   N_pct := N / sum(N), 
-  list(AttackingTeam, Team)
+  list(Team)
 ]
 
 dtPV = merge(
    dtPV[, 
       list(
-         TeamDeltaPV = round(seq(
-            dtPV[, min(TeamDeltaPV)],
-            dtPV[, max(TeamDeltaPV)],
+         AttackDeltaPV = round(seq(
+            dtPV[, min(AttackDeltaPV)],
+            dtPV[, max(AttackDeltaPV)],
             0.01
          ),2)
       ),
-      list(AttackingTeam, Team)
+      list(Team)
    ],
    dtPV,
-   c('AttackingTeam', 'Team','TeamDeltaPV'),
+   c('Team','AttackDeltaPV'),
    all.x = T
 )
 
 dtPV[is.na(N_pct), N_pct := 0]
 
 ggplot(dtPV) + 
-   geom_col(aes(x = TeamDeltaPV, y = N_pct, fill = Team, group = Team), position = 'dodge') + 
-   # geom_point(aes(x = TeamDeltaPV, y = N_pct, color = Team)) +
+   geom_col(aes(x = AttackDeltaPV, y = N_pct, fill = Team, group = Team), position = 'dodge') + 
+   # geom_point(aes(x = AttackDeltaPV, y = N_pct, color = Team)) +
    scale_y_continuous(labels = percent, name = 'Occurrence') +
    scale_x_continuous(labels = percent, name = 'Expected PV gain from random pass')
 
 ```
 
-- From the earlier histogram, we saw most of the pitch is usually negative expected delta PV so it isn't surprising that this distribution is completely in the negative. What this means is that a random pass is more likely to help the defending team than an attacking team.
+- From the earlier histogram, we saw most of the pitch usually offers a negative expected delta PV so it isn't surprising that this distribution is completely in the negative. What this means is that a random pass is more likely to help the defending team than an attacking team.
 
-Let us instead focus on the maximum expected delta PV gain at any instant as that is indicative of the best option to pass for the attacking team.
+If we had a model to predict probabilities of passing to areas on the pitch that would have been nice but we don't. Instead, we'll look at the maximum `ExpectedAttackingDeltaPV_xy` at any instant as that number is more indicative of the best option to pass for the attacking team at any instant.
 
 ```{r PositiveEPV, echo=FALSE}
 
@@ -628,46 +1174,45 @@ dtMaxPV = dtPVDelta[
    AttackingTeam == Team
 ][,
   list(
-     TeamMaxDeltaPV = max(TeamMaxDeltaPV)
+     AttackMaxDeltaPV = max(AttackMaxDeltaPV)
   ), 
   list(
      Frame, 
-     AttackingTeam, 
      Team
   )
 ][, 
   .N, 
-  list(AttackingTeam, Team, TeamMaxDeltaPV = round(floor(TeamMaxDeltaPV*100)/100,2))
+  list(Team, AttackMaxDeltaPV = round(floor(AttackMaxDeltaPV*100)/100,2))
 ][
-   order(AttackingTeam, Team, TeamMaxDeltaPV)
+   order(Team, AttackMaxDeltaPV)
 ][, 
   N_pct := N / sum(N), 
-  list(AttackingTeam, Team)
+  list(Team)
 ]
 
 dtMaxPV = merge(
    dtMaxPV[, 
       list(
-         TeamMaxDeltaPV = round(seq(
-            dtMaxPV[, min(TeamMaxDeltaPV)],
-            dtMaxPV[, max(TeamMaxDeltaPV)],
+         AttackMaxDeltaPV = round(seq(
+            dtMaxPV[, min(AttackMaxDeltaPV)],
+            dtMaxPV[, max(AttackMaxDeltaPV)],
             0.01
          ),2)
       ),
-      list(AttackingTeam, Team)
+      list(Team)
    ],
    dtMaxPV,
-   c('AttackingTeam', 'Team','TeamMaxDeltaPV'),
+   c('Team','AttackMaxDeltaPV'),
    all.x = T
 )
 
 dtMaxPV[is.na(N_pct), N_pct := 0]
-dtMaxPV[, Facet := 'Ideal']
+dtMaxPV[, Facet := 'Outcome']
 
 pMaxPV = ggplot() + 
   geom_col(
-     data = copy(dtMaxPV)[, Facet := 'Actual'],
-     aes(x = TeamMaxDeltaPV, y = N_pct, fill = Team, group = Team), 
+     data = copy(dtMaxPV)[, Facet := 'Intent'],
+     aes(x = AttackMaxDeltaPV, y = N_pct, fill = Team, group = Team), 
      position = 'dodge'
     ) + 
   scale_y_continuous(labels = percent, name = 'Occurrence') +
@@ -678,59 +1223,61 @@ print(pMaxPV)
 
 ```
 
-The proportion of time between -1 and 2% is:
+Most of the time, the best option offers an `ExpectedAttackingDeltaPV_xy` between -1% and 2% for both teams:
+
 ```{r PositiveEPVLow, echo=FALSE}
 
-print(
-  kable(
-    dtMaxPV[TeamMaxDeltaPV >= -0.01 & TeamMaxDeltaPV <= 0.02, list(HighTeamMaxDeltaPVActual_pct = paste0(100 * round(sum(N_pct),2), '%')), Team],
-    format = 'html'
-  )
+kable(
+  dtMaxPV[AttackMaxDeltaPV >= -0.01 & AttackMaxDeltaPV <= 0.02, list(HighAttackMaxDeltaPVIntent_pct = paste0(100 * round(sum(N_pct),2), '%')), Team],
+  format = 'html'
 )
 
 ```
 
-This means most of the time the optimal action available to the attacking team has very low values of `ExpectedAttackingDeltaPV_xy`, if at all. The proportion of time between -1% and 2% is -
+The proportion of time above 2% is -
 
 ```{r PositiveEPVGT1, echo=FALSE}
 
 (
   kable(
-    dtMaxPV[TeamMaxDeltaPV >= -0.01 & TeamMaxDeltaPV <= 0.02, list(LowTeamMaxDeltaPVActual_pct = paste0(100 * round(sum(N_pct),2), '%')), Team],
+    dtMaxPV[AttackMaxDeltaPV >= -0.01 & AttackMaxDeltaPV > 0.02, list(LowAttackMaxDeltaPVIntent_pct = paste0(100 * round(sum(N_pct),2), '%')), Team],
     format = 'html'
   )
 )
 
 ```
 
-### Team - Time level trends
+While the gain in PV might be large if some of these passes are successful, when you balance them out for the probability of those passes being unsuccessful, then the team in possession doesn't usually have a chance to attempt an action which offers a high probability large gain in PV.
+
+#### Team - observations in time
 
 ```{r PositiveEPVPlayerTimeline, echo=FALSE, warning=F, message=F}
 
 ggplot(
    dtPVDelta[
       AttackingTeam == Team, 
-      list(TeamMaxDeltaPV = max(TeamMaxDeltaPV)), 
+      list(AttackMaxDeltaPV = max(AttackMaxDeltaPV)), 
       list(Frame, Team)
    ]
 ) + 
-   geom_point(aes(x = Frame, y = TeamMaxDeltaPV, color = Team)) + 
+   geom_point(aes(x = Frame, y = AttackMaxDeltaPV, color = Team)) + 
    facet_wrap(~Team, ncol = 1) +
    scale_y_continuous(labels = percent)
 
 ```
 
-- Most of the high value expected delta PV for the attacking team, for either of the teams, is concentrated in time, which means they are just multiple frames from a much fewer number of instances. This means that for the most part the teams operate in a very low expected reward sort of situation and it is rare for a team to get a good opportunity to significantly progress the ball.
+- Most of the high value expected delta PV for the attacking team, for either of the teams, is concentrated in time, which means they are just multiple frames from a much fewer number of instances. For the most part the teams operate in a very low expected reward sort of situation.
+
 - You can see some patterns across the game, for instance the home team had a couple of very good chances to progress the ball towards the start of the game and had other chances through the game as well, while the away team had many good chances to progress the ball towards the end of the game but not much during the earlier part of the game. 
 
-### Team - Space level trends
+#### Team - observations in space
 
 The location of the highest expected delta PV at each instant during the sample of frames looks like as below.
 
 ```{r PitchTrend, echo=FALSE}
 
 dtPitchTrend = dtPVDelta[
-  Team == AttackingTeam
+  AttackingTeam == Team
 ][, 
   .SD[1], 
   list(Frame)
@@ -738,24 +1285,24 @@ dtPitchTrend = dtPVDelta[
 
 dtPitchTrend = dtPitchTrend[,
   .N, 
-  list(AttackingTeam, TeamMaxDeltaPVX, TeamMaxDeltaPVY)
+  list(Team, AttackMaxDeltaPVX, AttackMaxDeltaPVY)
 ]
 
 dtPitchTrend[,
   N_pct := N / sum(N),
-  list(AttackingTeam)
+  list(Team)
 ]
 
 dtPitchTrend = merge(
   dtPitchTrend,
   data.table(
     expand.grid(
-      AttackingTeam = dtPitchTrend[, unique(AttackingTeam)],
-      TeamMaxDeltaPVX = seq(-nXSpan/2, nXSpan/2,1),
-      TeamMaxDeltaPVY = seq(-nYSpan/2, nYSpan/2,1)
+      Team = dtPitchTrend[, unique(Team)],
+      AttackMaxDeltaPVX = seq(-nXSpan/2, nXSpan/2,1),
+      AttackMaxDeltaPVY = seq(-nYSpan/2, nYSpan/2,1)
     )
   ),
-  c('AttackingTeam','TeamMaxDeltaPVX','TeamMaxDeltaPVY'),
+  c('Team','AttackMaxDeltaPVX','AttackMaxDeltaPVY'),
   all = T
 )
 
@@ -764,14 +1311,14 @@ dtPitchTrend[
   N := 0
 ]
 
-dtPitchTrend[, N_pct := N / sum(N), list(AttackingTeam)]
+dtPitchTrend[, N_pct := N / sum(N), list(Team)]
 
 pPitchTrend = ggplot() +
   geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
   geom_jitter(
-    data = dtPitchTrend[N_pct != 0][, list(V1 = 1:N), list(TeamMaxDeltaPVX, TeamMaxDeltaPVY, AttackingTeam)],
+    data = dtPitchTrend[N_pct != 0][, list(V1 = 1:N), list(AttackMaxDeltaPVX, AttackMaxDeltaPVY, Team)],
     aes(
-      x = TeamMaxDeltaPVX, y = TeamMaxDeltaPVY,
+      x = AttackMaxDeltaPVX, y = AttackMaxDeltaPVY,
       # size = N_pct
     ), 
     size = 0.2, 
@@ -782,24 +1329,24 @@ pPitchTrend = ggplot() +
     # shape = 21
   ) +
   # scale_size_continuous(name = '% occurrence', labels = percent) +
-  facet_wrap(~AttackingTeam) + 
+  facet_wrap(~Team) + 
   theme_pitch()
 
     
 print(pPitchTrend)
 
+
 ```
 
 - The home team creates a lot more opportunities to progress the ball through the central areas in their own half compared to the away team that relies more heavily on opportunities wider areas. Wider areas are usually much more popular as a target though.
 - If you look at the area in the defensive halves, note how the away team more often presents the best opportunity towards the left, whereas the home team has better options more often on the right side deeper in their own half, and more often on the left side more advanced in their own half.
-- Both team have a preference towards the left side of the pitch in the final third.
 
 ```{r OriginPVTrend, echo=FALSE}
 
 if ( F ) {
       
-   ggplot(dtPVDelta[Team == AttackingTeam][, .SD[1], list(Frame)]) +
-       geom_point(aes(x = OriginPV, y = TeamMaxDeltaPV)) +
+   ggplot(dtPVDelta[AttackingTeam == Team][, .SD[1], list(Frame)]) +
+       geom_point(aes(x = OriginPV, y = AttackMaxDeltaPV)) +
        facet_wrap(~Team) + 
        coord_fixed()
    
@@ -807,52 +1354,81 @@ if ( F ) {
     
 ```
 
+```{r DistancePVTrend, echo=FALSE}
+
+if ( F ) {
+    
+  ggplot(
+    dtPVDelta[AttackingTeam == Team,.SD[1],Frame][,
+      list(
+        TargetDistance = (
+          ( ( AttackMaxDeltaPVX - BallX ) ^ 2 ) + ( ( AttackMaxDeltaPVX - BallY ) ^ 2 )
+        ) ^ 0.5,
+        AttackMaxDeltaPV
+      )
+    ]
+  ) +
+    geom_point(
+      aes(
+        x = AttackMaxDeltaPV,
+        y = TargetDistance
+      )
+    )
+  
+}
+
+```
+
 ### Instances of high positive expected delta PV
 
-Let's see what sort of potential passes show up if we filter for the maximum `ExpectedAttackingDeltaPV_xy` value at any frame > TeamDeltaPVThreshold. Again, these are potential passes that _could_ have been played and not necessarily the actual pass that was played at the time. There may also have been more than one such pass at any frame but we will pick only the one with the maximum `ExpectedAttackingDeltaPV_xy` value. It's also likely that during the course of the play, a similar kind of pass continued to remain the optimal choice and you would therefore see it multiple times. We can figure out a way to isolate unique passes and I can keep track of other high value passes even if they aren't the optimal but for now this is all we have.
+Let's see what sort of potential passes show up if we filter for the maximum `ExpectedAttackingDeltaPV_xy` value at any frame > AttackDeltaPVThreshold. Again, these are potential passes that _could_ have been played and not necessarily the actual pass that was played at the time. There may also have been more than one such pass at any frame but we will pick only the one with the maximum `ExpectedAttackingDeltaPV_xy` value. It's also likely that during the course of the play, a similar kind of pass continued to remain the optimal choice and you would therefore see it multiple times. We can figure out a way to isolate unique passes and I can keep track of other high value passes even if they aren't the optimal but for now this is all we have.
 
 ```{r OriginTarget, echo=FALSE}
 
-dtOriginTarget = dtPVDelta[
-  (TeamMaxDeltaPV) > TeamDeltaPVThreshold
-][
-  Team == AttackingTeam
-][
-  order(Frame)
-][
-  # c(T,diff(Frame) > 100)
-][,
-  .SD[1],
-  Frame
-]
+if ( T ) {
 
-dtOriginTarget[, Facet := 'Ideal']
-dtOriginTarget[, TeamMaxDeltaPVX := TeamMaxDeltaPVX + ( ( runif(.N) - 0.5 ) / 2 )]
-dtOriginTarget[, TeamMaxDeltaPVY := TeamMaxDeltaPVY + ( ( runif(.N) - 0.5 ) / 2 )]
-
-pOriginTarget = ggplot() +
-    geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
-    geom_point(
+  dtOriginTarget = dtPVDelta[
+    (AttackMaxDeltaPV) > AttackDeltaPVThreshold
+  ][
+    AttackingTeam == Team
+  ][
+    order(Frame)
+  ][
+    # c(T,diff(Frame) > 100)
+  ][,
+    .SD[1],
+    Frame
+  ]
+  
+  dtOriginTarget[, Facet := 'Outcome']
+  dtOriginTarget[, AttackMaxDeltaPVX := AttackMaxDeltaPVX + ( ( runif(.N) - 0.5 ) / 2 )]
+  dtOriginTarget[, AttackMaxDeltaPVY := AttackMaxDeltaPVY + ( ( runif(.N) - 0.5 ) / 2 )]
+  
+  pOriginTarget = ggplot() +
+      geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
+      geom_point(
+          data = dtOriginTarget,
+          aes(
+              x = AttackMaxDeltaPVX,
+              y = AttackMaxDeltaPVY
+          )
+      ) + 
+      geom_segment(
         data = dtOriginTarget,
-        aes(
-            x = TeamMaxDeltaPVX,
-            y = TeamMaxDeltaPVY
-        )
-    ) + 
-    geom_segment(
-      data = dtOriginTarget,
-        aes(
-            x = BallX,
-            y = BallY,
-            xend = TeamMaxDeltaPVX,
-            yend = TeamMaxDeltaPVY
-        ),
-        alpha = 0.25
-    ) + 
-    facet_wrap(~Team) +
-    theme_pitch()
-    
-print(pOriginTarget)
+          aes(
+              x = BallX,
+              y = BallY,
+              xend = AttackMaxDeltaPVX,
+              yend = AttackMaxDeltaPVY
+          ),
+          alpha = 0.25
+      ) + 
+      facet_wrap(~Team) +
+      theme_pitch()
+      
+  print(pOriginTarget)
+
+}
 
 ```
 
@@ -863,15 +1439,15 @@ print(pOriginTarget)
 
 ## Adjusting for passing ability
 
-A lot of the high positive expected delta PV passes are quite long passes, and long passes are likely to fetch more PV because it usually gets you much closer to the goal from where you were before. But it is also much harder to execute such passes. A player may want to aim for the most optimal target location but could end up playing the pass to an area near the the target. What we saw above accounts for intention, but we also need to account for exectuion to evaluate a more realistic `ExpectedAttackingDeltaPV_xy`.
+A lot of the high positive expected delta PV passes are quite long passes or at the edges of the pitch. Long passes are likely to fetch more PV because it usually gets you much closer to the goal from where you were before. Edges of the pitch are likely more attractive because Defenders will tend to stay towards the inside of attacking players. It is also much harder to execute such passes. The risk of passing the ball out of bounds, or not being able to pass exactly to the point a player wants to is much higher for these passes than it would be for less rewarding  passes. Until now we were looking at an outcome based `ExpectedAttackingDeltaPV_xy` but if we now switch it to an intention based `ExpectedAttackingDeltaPV_xy` then we would need to incorporate these risks in the reward we assign to an action.
 
-To incorporate that, I add some noise to the pass end location as a function of the length of the pass. What this noise basically does is that it assumes that a pass targeted at a particular location x,y could go anywhere in the neighbourhood of x,y depending on how far x,y is from the pass origin location. The longer the pass, the more the magnitude of the noise. The noise is spread as a two dimensional gaussian around the target location being aimed at. This definitely needs more rigorous work, in terms of understanding the distribution of how a pass can be off target but this is a reasonable simple assumption to get started with to illustrate the concept at least.
+To incorporate that, I add some noise to the pass end location as a function of the length of the pass. What this noise basically does is that it assumes that a pass targeted at a particular location x,y could go anywhere in the neighbourhood of x,y depending on how far x,y is from the pass origin location. The longer the pass, the more the magnitude of the noise. For passes towards the edges of the pitch, the probability that a ball is passed out of bound is considered as a turnover with the throw in being taken from the closest part of the pitch to the out of bound location. The noise is spread as a two dimensional gaussian around the target location being aimed at with the spread of the gaussian being a function of the distance of the attempt pass.
 
-The `ExpectedAttackingDeltaPV_xy` value now needs to be updated with the pitch control and the possession value of the neighbouring areas and the probability of the pass going to those neighbouring areas.
+There are things you can nitpick on as being too simplistic but again this is about presenting the concept. I don't have access to the kind of data required to merit building a more robust model so I'm not even going to try.
 
-Once do that, here is how the numbers change. Not significantly, but slightly. I'm calling this set of numbers the actual numbers and the earlier set of numbers the ideal numbers.
+Here is how the numbers change with the updated `ExpectedAttackingDeltaPV_xy`, which we will call `IntentExpectedAttackingDeltaPV_xy`.
 
-```{r PositiveProportionActual, echo=FALSE}
+```{r PositiveProportionIntent, echo=FALSE}
 
 dtPositiveProportion2 = dtPVDelta[
    AttackingTeam == Team
@@ -879,37 +1455,38 @@ dtPositiveProportion2 = dtPVDelta[
    .SD[1], 
    list(
      Frame, 
-     AttackingTeam, 
      Team
   )
 ][, 
    .N, 
-   list(AttackingTeam, Team, TeamPositiveProportionActual = round(floor(100*TeamPositiveProportionActual)/100,2))
+   list(Team, AttackPositiveProportionIntent = round(floor(100*AttackPositiveProportionIntent)/100,2))
 ][
-   order(AttackingTeam, Team, TeamPositiveProportionActual)
+   order(Team, AttackPositiveProportionIntent)
 ][, 
    N_pct := N / sum(N), 
-   list(AttackingTeam, Team)
+   list(Team)
 ]
 
 dtPositiveProportion2 = merge(
    dtPositiveProportion2[, 
       list(
-         TeamPositiveProportionActual = round(seq(
-            dtPositiveProportion2[, min(TeamPositiveProportionActual)],
-            dtPositiveProportion2[, max(TeamPositiveProportionActual)],
+         AttackPositiveProportionIntent = round(seq(
+            dtPositiveProportion2[, min(AttackPositiveProportionIntent)],
+            dtPositiveProportion2[, max(AttackPositiveProportionIntent)],
             0.01
          ),2)
       ),
-      list(AttackingTeam, Team)
+      list(Team)
    ],
    dtPositiveProportion2,
-   c('AttackingTeam', 'Team','TeamPositiveProportionActual'),
+   c('Team','AttackPositiveProportionIntent'),
    all.x = T
 )
 
 setnames(
-  dtPositiveProportion2,'TeamPositiveProportionActual','TeamPositiveProportion'
+  dtPositiveProportion2,
+  'AttackPositiveProportionIntent',
+  'AttackPositiveProportion'
 )
 
 dtPositiveProportion2[is.na(N_pct), N_pct := 0]
@@ -917,108 +1494,108 @@ dtPositiveProportion2[is.na(N_pct), N_pct := 0]
 dtPositiveProportion = merge(
   dtPositiveProportion,
   dtPositiveProportion2,
-  c('AttackingTeam','Team','TeamPositiveProportion'),
-  suffixes = c('.ideal','.actual'),
+  c('Team','AttackPositiveProportion'),
+  suffixes = c('.outcome','.intent'),
   all = T
 )
 
-dtPositiveProportion[is.na(N_pct.ideal), N_pct.ideal := 0]
-dtPositiveProportion[is.na(N_pct.actual), N_pct.actual := 0]
-# dtPositiveProportion2[, Type := 'Actual']
+dtPositiveProportion[is.na(N_pct.outcome), N_pct.outcome := 0]
+dtPositiveProportion[is.na(N_pct.intent), N_pct.intent := 0]
+# dtPositiveProportion2[, Type := 'Intent']
 
 pPositiveProportion = ggplot() + 
    geom_col(
-      data = copy(dtPositiveProportion)[, Facet := 'Ideal'],
-      aes(x = TeamPositiveProportion, y = N_pct.ideal, fill = Team, group = Team), 
+      data = copy(dtPositiveProportion)[, Facet := 'Outcome'],
+      aes(x = AttackPositiveProportion, y = N_pct.outcome, fill = Team, group = Team), 
       position = 'dodge'
    ) + 
    geom_col(
-      data = copy(dtPositiveProportion)[, Facet := 'Actual - Ideal'],
-      aes(x = TeamPositiveProportion, y = N_pct.actual - N_pct.ideal, fill = Team, group = Team), 
+      data = copy(dtPositiveProportion)[, Facet := 'Intent - Outcome'],
+      aes(x = AttackPositiveProportion, y = N_pct.intent - N_pct.outcome, fill = Team, group = Team), 
       position = 'dodge'
    ) + 
    geom_col(
-      data = copy(dtPositiveProportion)[, Facet := 'Actual'],
-      aes(x = TeamPositiveProportion, y = N_pct.actual, fill = Team, group = Team), 
+      data = copy(dtPositiveProportion)[, Facet := 'Intent'],
+      aes(x = AttackPositiveProportion, y = N_pct.intent, fill = Team, group = Team), 
       position = 'dodge'
    ) + 
-   # geom_point(aes(x = TeamPositiveProportion, y = N_pct, color = Team)) +
+   # geom_point(aes(x = AttackPositiveProportion, y = N_pct, color = Team)) +
    scale_colour_discrete(name = 'Team') +
    scale_y_continuous(labels = percent, name = 'Occurrence') +
    scale_x_continuous(labels = percent, name = 'Proportion of pitch area with a positive expected change in PV for the attacking team') +
   facet_grid(Facet~.)
 
 print(pPositiveProportion)
+
 ```
 
-```{r PositiveEPVActual, echo=FALSE}
+```{r PositiveEPVIntent, echo=FALSE}
 
 dtMaxPV2 = dtPVDelta[
    AttackingTeam == Team
 ][,
   list(
-     TeamMaxDeltaPVActual = max(TeamMaxDeltaPVActual)
+     AttackMaxDeltaPVIntent = max(AttackMaxDeltaPVIntent)
   ), 
   list(
      Frame, 
-     AttackingTeam, 
      Team
   )
 ][, 
   .N, 
-  list(AttackingTeam, Team, TeamMaxDeltaPVActual = round(floor(TeamMaxDeltaPVActual*100)/100,2))
+  list(Team, AttackMaxDeltaPVIntent = round(floor(AttackMaxDeltaPVIntent*100)/100,2))
 ][
-   order(AttackingTeam, Team, TeamMaxDeltaPVActual)
+   order(Team, AttackMaxDeltaPVIntent)
 ][, 
   N_pct := N / sum(N), 
-  list(AttackingTeam, Team)
+  list(Team)
 ]
 
 dtMaxPV2 = merge(
    dtMaxPV2[, 
       list(
-         TeamMaxDeltaPVActual = round(seq(
-            dtMaxPV2[, min(TeamMaxDeltaPVActual)],
-            dtMaxPV2[, max(TeamMaxDeltaPVActual)],
+         AttackMaxDeltaPVIntent = round(seq(
+            dtMaxPV2[, min(AttackMaxDeltaPVIntent)],
+            dtMaxPV2[, max(AttackMaxDeltaPVIntent)],
             0.01
          ),2)
       ),
-      list(AttackingTeam, Team)
+      list(Team)
    ],
    dtMaxPV2,
-   c('AttackingTeam', 'Team','TeamMaxDeltaPVActual'),
+   c('Team','AttackMaxDeltaPVIntent'),
    all.x = T
 )
 
 dtMaxPV2[is.na(N_pct), N_pct := 0]
 setnames(
-  dtMaxPV2, 'TeamMaxDeltaPVActual','TeamMaxDeltaPV'
+  dtMaxPV2, 'AttackMaxDeltaPVIntent','AttackMaxDeltaPV'
 )
 dtMaxPV = merge(
   dtMaxPV,
   dtMaxPV2,
-  c('AttackingTeam','Team','TeamMaxDeltaPV'),
-  suffixes = c('.ideal','.actual'),
+  c('Team','AttackMaxDeltaPV'),
+  suffixes = c('.outcome','.intent'),
   all = T
 )
 
-dtMaxPV[is.na(N_pct.ideal), N_pct.ideal := 0]
-dtMaxPV[is.na(N_pct.actual), N_pct.actual := 0]
+dtMaxPV[is.na(N_pct.outcome), N_pct.outcome := 0]
+dtMaxPV[is.na(N_pct.intent), N_pct.intent := 0]
 
 pMaxPV = ggplot() + 
   geom_col(
-     data = copy(dtMaxPV)[, Facet := 'Actual'],
-     aes(x = TeamMaxDeltaPV, y = N_pct.actual, fill = Team, group = Team), 
+     data = copy(dtMaxPV)[, Facet := 'Intent'],
+     aes(x = AttackMaxDeltaPV, y = N_pct.intent, fill = Team, group = Team), 
      position = 'dodge'
     ) + 
   geom_col(
-     data = copy(dtMaxPV)[, Facet := 'Ideal'],
-     aes(x = TeamMaxDeltaPV, y = N_pct.ideal, fill = Team, group = Team), 
+     data = copy(dtMaxPV)[, Facet := 'Outcome'],
+     aes(x = AttackMaxDeltaPV, y = N_pct.outcome, fill = Team, group = Team), 
      position = 'dodge'
     ) + 
   geom_col(
-     data = copy(dtMaxPV)[, Facet := 'Actual - Ideal'],
-     aes(x = TeamMaxDeltaPV, y = N_pct.actual - N_pct.ideal, fill = Team, group = Team), 
+     data = copy(dtMaxPV)[, Facet := 'Intent - Outcome'],
+     aes(x = AttackMaxDeltaPV, y = N_pct.intent - N_pct.outcome, fill = Team, group = Team), 
      position = 'dodge'
     ) + 
   scale_y_continuous(labels = percent, name = 'Occurrence') +
@@ -1029,10 +1606,10 @@ print(pMaxPV)
 
 ```
 
-```{r PitchTrendActual, echo=FALSE}
+```{r PitchTrendIntent, echo=FALSE}
 
 dtPitchTrend2 = dtPVDelta[
-  Team == AttackingTeam
+  AttackingTeam == Team
 ][, 
   .SD[1], 
   list(Frame)
@@ -1041,46 +1618,46 @@ dtPitchTrend2 = dtPVDelta[
 dtPitchTrend2 = dtPitchTrend2[,
   .N, 
   list(
-    AttackingTeam, 
-    TeamMaxDeltaPVX = TeamMaxDeltaPVActualX, 
-    TeamMaxDeltaPVY = TeamMaxDeltaPVActualY
+    Team, 
+    AttackMaxDeltaPVX = AttackMaxDeltaPVIntentX, 
+    AttackMaxDeltaPVY = AttackMaxDeltaPVIntentY
   )
 ]
 
 dtPitchTrend2[,
   N_pct := N / sum(N),
-  list(AttackingTeam)
+  list(Team)
 ]
 
 dtPitchTrend = merge(
   dtPitchTrend2,
   dtPitchTrend,
-  c('AttackingTeam','TeamMaxDeltaPVX','TeamMaxDeltaPVY'),
+  c('Team','AttackMaxDeltaPVX','AttackMaxDeltaPVY'),
   all = T,
-  suffixes = c('.actual','.ideal')
+  suffixes = c('.intent','.outcome')
 )
 
 dtPitchTrend[
-  is.na(N_pct.ideal),
-  N_pct.ideal := 0
+  is.na(N_pct.outcome),
+  N_pct.outcome := 0
 ]
 
 dtPitchTrend[
-  is.na(N_pct.actual),
-  N_pct.actual := 0
+  is.na(N_pct.intent),
+  N_pct.intent := 0
 ]
 
-dtPitchTrend[, ActualMinusIdeal := as.character(sign(N_pct.actual - N_pct.ideal))]
-dtPitchTrend[ActualMinusIdeal == '-1', ActualMinusIdeal := '-']
-dtPitchTrend[ActualMinusIdeal == '1', ActualMinusIdeal := '+']
-dtPitchTrend[ActualMinusIdeal == '0', ActualMinusIdeal := '']
+dtPitchTrend[, IntentMinusOutcome := as.character(sign(N_pct.intent - N_pct.outcome))]
+dtPitchTrend[IntentMinusOutcome == '-1', IntentMinusOutcome := '-']
+dtPitchTrend[IntentMinusOutcome == '1', IntentMinusOutcome := '+']
+dtPitchTrend[IntentMinusOutcome == '0', IntentMinusOutcome := '']
 
 pPitchTrend = ggplot() +
     geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
     geom_jitter(
-        data = dtPitchTrend[N_pct.ideal != 0][, list(V1 = 1:N.ideal, Facet = 'Ideal'), list(TeamMaxDeltaPVX, TeamMaxDeltaPVY, AttackingTeam)],
+        data = dtPitchTrend[N_pct.outcome != 0][, list(V1 = 1:N.outcome, Facet = 'Outcome'), list(AttackMaxDeltaPVX, AttackMaxDeltaPVY, Team)],
         aes(
-            x = TeamMaxDeltaPVX, y = TeamMaxDeltaPVY,
+            x = AttackMaxDeltaPVX, y = AttackMaxDeltaPVY,
             # size = N_pct
         ), 
         size = 0.2,
@@ -1091,9 +1668,9 @@ pPitchTrend = ggplot() +
         # shape = 21
     ) +
     geom_jitter(
-        data = dtPitchTrend[N_pct.actual != 0][, list(V1 = 1:N.actual, Facet = 'Actual'), list(TeamMaxDeltaPVX, TeamMaxDeltaPVY, AttackingTeam)],
+        data = dtPitchTrend[N_pct.intent != 0][, list(V1 = 1:N.intent, Facet = 'Intent'), list(AttackMaxDeltaPVX, AttackMaxDeltaPVY, Team)],
         aes(
-            x = TeamMaxDeltaPVX, y = TeamMaxDeltaPVY,
+            x = AttackMaxDeltaPVX, y = AttackMaxDeltaPVY,
             # size = N_pct
         ), 
         size = 0.2,
@@ -1103,7 +1680,7 @@ pPitchTrend = ggplot() +
         # fill = 'transparent', 
         # shape = 21
     ) +
-    facet_grid(Facet~AttackingTeam) + 
+    facet_grid(Facet~Team) + 
     theme_pitch()
 
 print(pPitchTrend)
@@ -1111,26 +1688,32 @@ print(pPitchTrend)
     
 ```
 
-```{r OriginTargetActual, echo=FALSE}
+```{r OriginTargetIntent, echo=FALSE}
 
-dtOriginTarget = dtPVDelta[(TeamMaxDeltaPVActual) > TeamDeltaPVThreshold][Team == AttackingTeam][order(Frame)][
+dtOriginTarget = dtPVDelta[
+  (AttackMaxDeltaPVIntent) > AttackDeltaPVThreshold
+][
+  AttackingTeam == Team
+][
+  order(Frame)
+][
   # c(T,diff(Frame) > 100)
 ][,
   .SD[1],
   Frame
 ]
 
-dtOriginTarget[, Facet := 'Actual']
-dtOriginTarget[, TeamMaxDeltaPVX := TeamMaxDeltaPVX + ( ( runif(.N) - 0.5 ) / 2 )]
-dtOriginTarget[, TeamMaxDeltaPVY := TeamMaxDeltaPVY + ( ( runif(.N) - 0.5 ) / 2 )]
+dtOriginTarget[, Facet := 'Intent']
+dtOriginTarget[, AttackMaxDeltaPVX := AttackMaxDeltaPVX + ( ( runif(.N) - 0.5 ) / 2 )]
+dtOriginTarget[, AttackMaxDeltaPVY := AttackMaxDeltaPVY + ( ( runif(.N) - 0.5 ) / 2 )]
 
 pOriginTarget +
     # geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
     geom_point(
         data = dtOriginTarget,
         aes(
-            x = TeamMaxDeltaPVActualX,
-            y = TeamMaxDeltaPVActualY
+            x = AttackMaxDeltaPVIntentX,
+            y = AttackMaxDeltaPVIntentY
         )
     ) + 
     geom_segment(
@@ -1138,8 +1721,8 @@ pOriginTarget +
         aes(
             x = BallX,
             y = BallY,
-            xend = TeamMaxDeltaPVActualX,
-            yend = TeamMaxDeltaPVActualY
+            xend = AttackMaxDeltaPVIntentX,
+            yend = AttackMaxDeltaPVIntentY
         ),
         alpha = 0.25
     ) + 
@@ -1150,257 +1733,246 @@ pOriginTarget +
 - The distributions don't move significantly but they do move a little bit towards the direction of lower possible gains. This makes sense, you'd expect ådding noise to reduce the optimal value.
 - Note the slightly lesser instances of the model suggesting that the pass should be right at the goal mouth or even at the edge of the pitch on the wings. Because in those cases, there is a chance of the ball going out of bounds as well which would mean handing over the ball to the other team. This reduces how attractive those locations are and the optimal locations move a little inwards. How much they move inside is likely an artifact of the way the noise has been incorporated in the model though, because the locations are still clumped tightly
 
-### Player level - Recipient
+Here is a distribution of the distance between the Intent optimal pass location and the Outcome optimal pass location by the pass distance.
 
-We calculated `ExpectedAttackingDeltaPV_xy` and `ExpectedDefendingDeltaPV_xy` at a team level above. We can now distribute that amongst the players of the attacking and defending team respectively in proportion to their pitch control probability at that part of the pitch:
+```{r DistanceChange, echo=FALSE}
 
-- `PlayerExpectedAttackingDeltaPV_xy = ExpectedAttackingDeltaPV_xy * PlayerPitchControlProbability_xy / AttackingTeamPitchControlProbability_xy`
-- `PlayerExpectedDefendingDeltaPV_xy = ExpectedDefendingDeltaPV_xy * PlayerPitchControlProbability_xy / DefendingTeamPitchControlProbability_xy`
-
-The max of these values across the entire space of the pitch at each instant during the game tells us what is the best option an individual player offers. Various aggregations of these values over the game could give us an indication of the contribution of a player. 
-
-We will use the actual version of the numbers and not the ideal version of the numbers.
-
-```{r PositiveEPVPlayer, echo=FALSE}
-
-dtPlayerLevelMetrics = merge(
-   dtPVDelta[
-      AttackingTeam == Team
-   ][, 
-     .N, 
-     list(AttackingTeam, Team, Player, PlayerMaxDeltaPVActual = floor(100 * PlayerMaxDeltaPVActual)/100)
-   ][
-      order(AttackingTeam, Team, Player, PlayerMaxDeltaPVActual)
-   ][, 
-     N_pct := N / sum(N), 
-     list(AttackingTeam, Team, Player)
-   ],
-   dtPlayerLabels,
-   'Player'
-)
-
-dtPlayerLevelMetrics[,
-   TeamLabel := factor(
-      paste0(Team, ' - ', Label),
-      levels = dtPlayerLevelMetrics[, 1, list(Team, Label)][order(Team, Label)][, paste(Team, '-', Label)],
-      ordered = T
-   )  
-]
-
-p1 = ggplot(dtPlayerLevelMetrics) + 
-   geom_col(aes(x = PlayerMaxDeltaPVActual, y = N_pct, fill = Team, group = Team)) + 
-   # geom_point(aes(x = PlayerMaxDeltaPVActual, y = N_pct, color = Team)) +
-   scale_y_continuous(labels = percent, name = 'Occurrence') +
-   scale_x_continuous(labels = percent, name = 'Max expected PV gain') +
-   scale_fill_discrete(guide = F) +
-   facet_wrap(~TeamLabel)
-
-p1
-
-```
-
-The percent of time players offer a high ( > `r PlayerDeltaPVThreshold` ) `PlayerExpectedAttackingDeltaPV_xy` value:
-
-```{r PositiveEPVPlayerGTXlim, echo=FALSE, warning=F, message=F}
-
-kable(
-  dtPlayerLevelMetrics[, 
-    list(
-      HighPlayerMaxDeltaPVActual_pct = sum(N_pct[PlayerMaxDeltaPVActual >= PlayerDeltaPVThreshold])
-    ),
-    list(Player = TeamLabel)
-  ][
-    order(-HighPlayerMaxDeltaPVActual_pct),
-    list(
-      HighPlayerMaxDeltaPVActual_pct = paste0(100 * round(HighPlayerMaxDeltaPVActual_pct,2),'%'),
-      Player
-    )
-  ], format = 'html'
-)
-
-if  ( F ) {
-    
-  p1 + 
-    scale_x_continuous(
-      labels = percent, 
-      name = 'Max expected PV gain', 
-      limits = c(0.01, NA)
-    )
-  
-}
-```
-
-- Again, almost all of it lies between -1% to 1%. 
-- The away team is a little better than the home team though, with a higher proportion of occurrence in the 0% to 1% band and less in the -1% to 0% compared to the home team.
-
-- The occurrence of high values is very low, which we could already have guessed from the team level distributions. 
-
-The locations of high progression opportunities, `PlayerExpectedAttackingDeltaPV_xy` > 0.01, are as below -
-
-```{r PositiveEPVPlayerGT1, echo=FALSE, warning=F, message=F, fig.height = 12}
-
-dtPlayerLevelXY = merge(
-   dtPVDelta[, 1, list(Player, Team)], 
-   dtPVDelta[Team == AttackingTeam][PlayerMaxDeltaPVActual > 0.01], 
-   c('Team','Player'),
-   all.x = T
-)
-
-dtPlayerLevelXY = merge(
-   dtPlayerLabels,
-   dtPlayerLevelXY,
-   'Player'
-)
-
-dtPlayerLevelXY[,
-   TeamLabel := factor(
-      paste0(Team, ' - ', Label),
-      levels = dtPlayerLevelMetrics[, 1, list(Team, Label)][order(Team, Label)][, paste(Team, '-', Label)],
-      ordered = T
-   )  
-]
-
-ggplot(dtPlayerLevelXY) + 
-   geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
-   geom_jitter(aes(x= PlayerMaxDeltaPVActualX, y = PlayerMaxDeltaPVActualY), size = 0.2, width = 0.5, height = 0.5) +
-   facet_wrap(~TeamLabel, ncol = 4) + 
-   coord_fixed() + 
-   scale_color_continuous(low = 'black', high = 'red') +
-   theme_pitch()
-
-```
-
-When comparing metrics like how often a player receives progressive passes, using this as a baseline would help with a better assessment of players. If two players receive a similar number of progressive passes ( p90, adjusted for possesion, etc. ) with similar PV gain but if player 1 created far more opportunities to receive such passes than player 2 then player 1 needs to be given extra credit.
-
-### Player level - Passer
-
-Usually the passer is credited with the PV gained from a pass so we should also look at what opportunities the rest of the team presents to them, including the player in possession themselves.
-
-```{r PositiveEPVPlayerPasser, echo=FALSE}
-
-dtPlayerLevelMetrics = merge(
-   dtPVDelta[
-      AttackingTeam == Team
-   ][,
-     list(
-       TeamMaxDeltaPVActual = max(TeamMaxDeltaPVActual)
-     ),
-     list(
-       Frame,
-       AttackingTeam, 
-       Team,
-       Player = PlayerInPossession
-     )
-   ][, 
-     .N, 
-     list(AttackingTeam, Team, Player, TeamMaxDeltaPVActual = floor(100 * TeamMaxDeltaPVActual)/100)
-   ][
-      order(AttackingTeam, Team, Player, TeamMaxDeltaPVActual)
-   ][, 
-     N_pct := N / sum(N), 
-     list(AttackingTeam, Team, Player)
-   ],
-   dtPlayerLabels,
-   'Player'
-)
-
-dtPlayerLevelMetrics[,
-   TeamLabel := factor(
-      paste0(Team, ' - ', Label),
-      levels = dtPlayerLevelMetrics[, 1, list(Team, Label)][order(Team, Label)][, paste(Team, '-', Label)],
-      ordered = T
-   )  
-]
-
-p1 = ggplot(dtPlayerLevelMetrics) + 
-   geom_col(aes(x = TeamMaxDeltaPVActual, y = N_pct, fill = Team, group = Team)) + 
-   # geom_point(aes(x = TeamMaxDeltaPVActual, y = N_pct, color = Team)) +
-   scale_y_continuous(labels = percent, name = 'Occurrence') +
-   scale_x_continuous(labels = percent, name = 'Max expected PV gain') +
-   facet_wrap(~TeamLabel)
-
-p1
-
-```
-
-```{r PositiveEPVPlayerGTXlimPasser, echo=FALSE, warning=F, message=F}
-
-kable(
-  dtPlayerLevelMetrics[, 
-    list(
-      HighTeamMaxDeltaPVActual_pct = sum(N_pct[TeamMaxDeltaPVActual >= TeamDeltaPVThreshold])
-    ),
-    list(Player = TeamLabel)
-  ][
-    order(-HighTeamMaxDeltaPVActual_pct),
-    list(
-      HighTeamMaxDeltaPVActual_pct = paste0(100 * round(HighTeamMaxDeltaPVActual_pct,2),'%'),
-      Player
-    )
-  ], format = 'html'
-)
+dtPVDeltaChange = dtPVDelta[
+        AttackingTeam == Team, 
+        .SD[1], 
+        Frame
+    ][,
+      list(
+          Frame,
+          Team,
+          PassDistance = (
+              ( ( BallX - AttackMaxDeltaPVX ) ^ 2 ) +
+                  ( ( BallY - AttackMaxDeltaPVY ) ^ 2 ) 
+          ) ^ 0.5,
+          PassIntentDistance = (
+              ( ( BallX - AttackMaxDeltaPVIntentX ) ^ 2 ) +
+                  ( ( BallY - AttackMaxDeltaPVIntentY ) ^ 2 ) 
+          ) ^ 0.5,
+          TargetChangeDistance = (
+              ( ( AttackMaxDeltaPVIntentX - AttackMaxDeltaPVX ) ^ 2 ) +
+                  ( ( AttackMaxDeltaPVIntentY - AttackMaxDeltaPVY ) ^ 2 ) 
+          ) ^ 0.5
+      )
+    ]
 
 if ( F ) {
     
-  p1 + 
-    scale_x_continuous(
-      labels = percent, 
-      name = 'Max expected PV gain', 
-      limits = c(0.01, NA)
-    )
+  ggplot() +
+     geom_boxplot(
+        data = dtPVDelta[
+           AttackingTeam == Team, 
+           .SD[1], 
+           Frame
+        ][,
+           list(
+              Team,
+              PassDistance = (
+                 ( ( BallX - AttackMaxDeltaPVX ) ^ 2 ) +
+                    ( ( BallY - AttackMaxDeltaPVY ) ^ 2 ) 
+              ) ^ 0.5,
+              PassIntentDistance = (
+                 ( ( BallX - AttackMaxDeltaPVIntentX ) ^ 2 ) +
+                    ( ( BallY - AttackMaxDeltaPVIntentY ) ^ 2 ) 
+              ) ^ 0.5,
+              TargetChangeDistance = (
+                 ( ( AttackMaxDeltaPVIntentX - AttackMaxDeltaPVX ) ^ 2 ) +
+                    ( ( AttackMaxDeltaPVIntentY - AttackMaxDeltaPVY ) ^ 2 ) 
+              ) ^ 0.5
+           )
+        ],
+        aes(
+           x = 10 * ( PassDistance %/% 10 ),
+           # y = TargetChangeDistance,
+           y = PassIntentDistance - PassDistance,
+           group = paste0(Team, 10 * ( PassDistance %/% 10 )),
+           color = Team
+        ),
+        fill = 'transparent'
+     )
 
 }
-```
 
-```{r PositiveEPVPlayerGT1Passer, echo=FALSE, warning=F, message=F, fig.height = 12}
-
-dtPlayerLevelXY = merge(
-   dtPVDelta[, 1, list(PlayerInPossession = Player, Team)], 
-   dtPVDelta[Team == AttackingTeam][,.SD[1],list(Frame,Tag)][TeamMaxDeltaPVActual > TeamDeltaPVThreshold], 
-   c('Team','PlayerInPossession'),
-   all.x = T
-)
-
-dtPlayerLevelXY[, Player := NULL]
-
-setnames(
-  dtPlayerLevelXY,'PlayerInPossession','Player'
-)
-
-dtPlayerLevelXY = merge(
-   dtPlayerLabels,
-   dtPlayerLevelXY,
-   'Player'
-)
-
-dtPlayerLevelXY[,
-   TeamLabel := factor(
-      paste0(Team, ' - ', Label),
-      levels = dtPlayerLevelMetrics[, 1, list(Team, Label)][order(Team, Label)][, paste(Team, '-', Label)],
-      ordered = T
-   )  
-]
-
-ggplot(dtPlayerLevelXY) + 
-   geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
-   geom_jitter(aes(x= TeamMaxDeltaPVActualX, y = TeamMaxDeltaPVActualY), width = 0.5, height = 0.5) +
-   facet_wrap(~TeamLabel, ncol = 4) + 
-   coord_fixed() + 
-   scale_color_continuous(low = 'black', high = 'red') +
-   theme_pitch()
+ggplot(
+    dtPVDeltaChange[, 
+      .N, 
+      list(
+          Team, 
+          PassDistance = 10 * floor(PassDistance/10), 
+          # PassIntentDistance = 10 * floor(PassIntentDistance/10),
+          ChangeInDistance = round(PassIntentDistance - PassDistance, -1)
+      )
+    ][, 
+      list(ChangeInDistance, N_pct = N/sum(N)), 
+      list(Team, PassDistance)
+    ]
+) + 
+    geom_tile(aes(x = PassDistance, y = ChangeInDistance, alpha = N_pct)) +
+    geom_text(aes(x = PassDistance, y = ChangeInDistance, label = round(N_pct,2))) +
+    facet_wrap(~Team)
 
 ```
 
-Helps interpret stats better just like how I explained it with receiving passes earlier, 
+Longer passes are more likely to be in areas with small pockets of space so the fact that we include the possibility of slightly wayward passes means the reward of _intending_ to pass to them reduces and the optimal passes tend to become shorter. It's a little odd that the longest passes aren't as compromised as the medium range passes though, and I suspect it's the goalkeeper area being tricky again. ( If I had to argue against this I'd say that we use a distance based noise function because we expect longer passes to be harder to execute and therefore The trend of longer passes seeing a more drastic change might be a self-fulfilling result. )
 
-### Using Player Level Metrics To Evalaute Player Performance
+As an illustration -
 
-At each stretch of possession for a player, they have multiple opportunities to play a pass. Using the metric of expected delta PV, we can find the `ExpectedAttackingDeltaPV_xy` of choices they had during that stretch of possession and compare it to the choice they finally made and how sub optimal that choice was. Players who have an eye for good passes should make choices close to optimal very often.
+```{r IntentIllustrationData, echo = F}
 
-Can consider each frame of ball possession as an event - which can be considered as either a pass or a carry or a shot. Integrate `ExpectedAttackingDeltaPV_xy` over each event and also integrate the actual delta PV attained from the actual action at each event and compare the two.
+load(
+   file.path(
+      cRootDirectory,
+      'PassingAwareness',
+      'ProgressivePassingOpportunity',
+      cGameName,
+      'Actual',
+      '4',
+      'Results',
+      '52293.Rdata'
+   )
+)
 
-```{r BestOpportunityDuringPossession, echo=FALSE, warning=F, message=F, fig.height = 12}
+load(
+   file.path(
+      cRootDirectory,
+      'PassingAwareness',
+      'ProgressivePassingOpportunity',
+      cGameName,
+      'Actual',
+      '4',
+      'Metadata.Rdata'
+   )
+)
 
-# dtPVDelta[AttackingTeam == Team, .SD[1], list(Frame)][, .SD[which.max(TeamMaxDeltaPVActual)], PossessionID]
+lIntentValues = fGetIntentValues(lMetadata, lPitchControl, lData)
+
+pChangePitchControl = ggplot() +
+  # geom_tile(
+  #   data = lIntentValues$dtDetailsAggregated[AttackingTeam == Tag][, Facet := 'Outcome'],
+  #   aes(
+  #     x = TargetX,
+  #     y = TargetY,
+  #     fill = AttackPPCF
+  #   )
+  # ) +
+  # geom_tile(
+  #   data = lIntentValues$dtDetailsAggregated[AttackingTeam == Tag][, Facet := 'Intent'],
+  #   aes(
+  #     x = TargetX,
+  #     y = TargetY,
+  #     fill = AttackPPCFIntent
+  #   )
+  # ) +
+  geom_tile(
+    data = lIntentValues$dtDetailsAggregated[AttackingTeam == Tag][, Facet := 'Intent - Outcome'],
+    aes(
+      x = TargetX,
+      y = TargetY,
+      fill = AttackPPCFIntent - AttackPPCF
+    )
+  ) + geom_point(
+        data = lPitchControl$dtTrackingSlice[Tag == 'B'],
+        aes(x = X, y = Y),
+        color = 'black',
+        size = 3
+    ) +
+    geom_point(
+        data = lPitchControl$dtTrackingSlice[Tag != 'B'],
+        aes(x = X, y = Y, color = Tag)
+    ) +
+  scale_fill_gradient2(low = 'red', high = 'blue', mid = 'white') +
+  geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
+  facet_wrap(~Facet)
+
+print(pChangePitchControl)
+
+pChangePitchControl = ggplot() +
+  # geom_tile(
+  #   data = lIntentValues$dtDetailsAggregated[AttackingTeam == Tag][, Facet := 'Outcome'],
+  #   aes(
+  #     x = TargetX,
+  #     y = TargetY,
+  #     fill = AttackPPCF
+  #   )
+  # ) +
+  # geom_tile(
+  #   data = lIntentValues$dtDetailsAggregated[AttackingTeam == Tag][, Facet := 'Intent'],
+  #   aes(
+  #     x = TargetX,
+  #     y = TargetY,
+  #     fill = AttackPPCFIntent
+  #   )
+  # ) +
+  geom_tile(
+    data = lIntentValues$dtDetailsAggregated[AttackingTeam == Tag][
+      TargetX >= -10 & TargetY > -35 & TargetY < 35
+    ][, Facet := 'Intent - Outcome'],
+    aes(
+      x = TargetX,
+      y = TargetY,
+      fill = AttackPPCFIntent - AttackPPCF
+    )
+  ) + geom_point(
+        data = lPitchControl$dtTrackingSlice[Tag == 'B'],
+        aes(x = X, y = Y),
+        color = 'black',
+        size = 3
+    ) +
+    geom_point(
+        data = lPitchControl$dtTrackingSlice[Tag != 'B'],
+        aes(x = X, y = Y, color = Tag)
+    ) +
+  scale_fill_gradient2(low = 'red', high = 'blue', mid = 'white') +
+  geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
+  facet_wrap(~Facet)
+
+print(pChangePitchControl)
+
+
+pChangePV = ggplot() +
+  # geom_tile(
+  #   data = lIntentValues$dtDetailsAggregated[AttackingTeam == Tag][, Facet := 'Outcome'],
+  #   aes(
+  #     x = TargetX,
+  #     y = TargetY,
+  #     fill = AttackDeltaPV
+  #   )
+  # ) +
+  # geom_tile(
+  #   data = lIntentValues$dtDetailsAggregated[AttackingTeam == Tag][, Facet := 'Intent'],
+  #   aes(
+  #     x = TargetX,
+  #     y = TargetY,
+  #     fill = AttackDeltaPVIntent
+  #   )
+  # ) +
+  geom_tile(
+    data = lIntentValues$dtDetailsAggregated[AttackingTeam == Tag][
+      TargetX >= -10 & TargetY > -35 & TargetY < 35
+    ][, Facet := 'Intent - Outcome'],
+    aes(
+      x = TargetX,
+      y = TargetY,
+      fill = AttackDeltaPVIntent - AttackDeltaPV
+    )
+  ) + geom_point(
+        data = lPitchControl$dtTrackingSlice[Tag == 'B'],
+        aes(x = X, y = Y),
+        color = 'black',
+        size = 3
+    ) +
+    geom_point(
+        data = lPitchControl$dtTrackingSlice[Tag != 'B'],
+        aes(x = X, y = Y, color = Tag)
+    ) +
+  scale_fill_gradient2(low = 'red', high = 'blue', mid = 'white') +
+  geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
+  facet_wrap(~Facet)
+
+print(pChangePV)
 
 ```

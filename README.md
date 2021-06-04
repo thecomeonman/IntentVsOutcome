@@ -1,20 +1,29 @@
-Using possession value to measure the value of the actions of players is
-a commonly seen statistic on Twitter now. These are usually on ball
-ations though. A question I’ve been thinking about is how can we value
-off ball actions.
+This is a thinking out loud kind of post. A bunch of basic charts and
+numbers are here which should be enough to give an idea of what I’m
+proposing. I want to think about this some more, which is usually a long
+and slow process because life gets in the way, before doing a version
+with nice looking vizes, etc. + also get feedback and comments from you
+guys.
 
-Using pitch control, we can estimate the probability of players
-controlling the ball in various parts of the pitch so we could simulate
-passes that didn’t actually happen to estimate how much value a player
-*could* have added from passes they *could* have received. This is not
-the same as estimating the value of their off ball actions but more like
-an adjustment for the fact that not every player in the team will
-receive as many passes, good opportunities to pass to them might get
-missed because of reasons beyond their control, etc.
+# Introduction
 
-This is a thinking out loud kind of post. If you have ideas or inputs on
-this then let’s talk. I’m on Twitter as @thecomeonman, or email mail dot
-thecomeonman at gmail.
+<http://www.lukebornn.com/papers/fernandez_sloan_2019.pdf> comes up with
+a probabilistic possession value based on combining the possession value
+of the part of the pitch, the probability of the ball being controlled
+in the part of the pitch from pitch control, and the probability of the
+ball being played to that part of the pitch from an action likelihood
+model. These numbers can then be used to infer passing tendencies,
+awareness, positioning, and many other things.
+
+We’ll exclude action likelihood for now, because I want to fairly
+evaluate any opportunity across the pitch without
+
+Pitch control and probably action likelihood are *outcome* based models.
+Pitch control tells you the probability of controlling the ball if it
+were played to that part of the pitch. Action likelihood is also
+probably based on data from what *happened* in actual matches. An
+additional aspect we need to model to evaluate things like player
+decision making is *intention*.
 
 ## Methodology
 
@@ -23,7 +32,10 @@ thecomeonman at gmail.
 Pitch control tells you the probability of a team and its players
 controlling the ball at various parts of the pitch if the ball were to
 be passed there. This is done for each instant of the game and changes
-based on the psitions of the players and their movement.
+based on the positions of the players and their movement.
+
+I use Spearman’s model but you could probably swap it out for any other
+model too.
 
 ### Possession Value
 
@@ -38,11 +50,21 @@ which looks like this for the team attacking left to right -
 ![](README_files/figure-markdown_strict/PVParms-1.png)
 
 We can rotate the pitch 180 degrees and get the PV values for the
-respective part of the pitch for the opposition for them attacking right
-to left.
+respective part of the pitch for the opposition since that team is
+attacking right to left.
 
 Note how the probability sharply climbs close to 50% near the opposition
 goal but is quite low for most of the pitch.
+
+You should be able to swap it out for another PV model, if you so
+prefer.
+
+### Model 3
+
+I don’t have a good model for this yet and don’t know of o public one
+either. I will try and explain what I’m doing without this model for
+now. I can’t say how much the results carry over when this model gets
+included though.
 
 ### Combining Pitch Control and Possession Value
 
@@ -50,40 +72,39 @@ You should be able to combine these to evaluate what passing options
 offer progress to the team in possession.
 
 -   The team in possession already has a certain PV depending on where
-    they have the ball: `AttackingOriginPV`
+    they have the ball: `AttackOriginPV`
 -   The defending team is equally at risk of conceding a goal from that
-    position, so the `DefendingingOriginPV = -AttackingOriginPV`
+    position, so the `DefenseOriginPV = -AttackOriginPV`
 -   Assuming it is possible to pass to every point on the pitch,
     `(x,y)`, the PV for each target location can be calculated for both
-    the teams, `AttackingTargetPV_xy` and `DefendingTargetPV_xy`
+    the teams, `AttackTargetPV_xy` and `DefenseTargetPV_xy`
 -   At every point on the pitch, `(x,y)`, the attacking team has a
-    probability of keeping control of the ball,
-    `AttackingTeamProbabilty_xy`, and therefore the defending team’s
-    probability is
-    `DefendingTeamProbabilty_xy = 1 - AttackingTeamProbabilty_xy`
+    probability of keeping control of the ball, `AttackProbabilty_xy`,
+    and therefore the defending team’s probability is
+    `DefenseProbabilty_xy = 1 - AttackProbabilty_xy`
 -   At every point, `(x,y)`, we can estimate an expected PV for playing
     a pass there:
     -   For the attacking team,
-        `ExpectedAttackingTargetPV = ( AttackingTeamProbabilty_xy * AttackingTargetPV_xy ) - ( DefendingTeamProbabilty_xy * DefendingTargetPV_xy )`
+        `ExpectedAttackTargetPV = ( AttackProbabilty_xy * AttackTargetPV_xy ) - ( DefenseProbabilty_xy * DefenseTargetPV_xy )`
     -   For the defending team, which is the same as the above formula
         with the attacking / defending terms exchanged,
-        `ExpectedDefendingTargetPV = ( DefendingTeamProbabilty_xy * DefendingTargetPV_xy ) - ( AttackingTeamProbabilty_xy * AttackingTargetPV_xy )`
+        `ExpectedDefenseTargetPV = ( DefenseProbabilty_xy * DefenseTargetPV_xy ) - ( AttackProbabilty_xy * AttackTargetPV_xy )`
 -   The change in PV from the current position can be calculated as the
     difference of the above terms from the PV of the starting position:
     -   For the attacking team,
-        `ExpectedAttackingDeltaPV_xy = ExpectedAttackingTargetPV_xy - AttackingOriginPV`
+        `ExpectedAttackingDeltaPV_xy = ExpectedAttackTargetPV_xy - AttackOriginPV`
     -   For the defending team,
-        `ExpectedDefendingDeltaPV_xy = ExpectedDefendingTargetPV_xy - DefendingOriginPV`
+        `ExpectedDefenseingDeltaPV_xy = ExpectedDefenseTargetPV_xy - DefenseingOriginPV`
 
 Given we know the PV of each part of the pitch for both teams, and we
 know that the probability of controlling the ball for both teams must
 add up to 1 in each part of the pitch, we can calculate the minimum
-value `ExpectedAttackingTargetPV_xy` must be in each part of the pitch
-for it to compensate for `ExpectedDefendingDeltaPV_xy`, and therefore we
-can also calculate the minimum value `AttackingTeamProbabilty_xy` should
-be for `ExpectedAttackingTargetPV_xy` to attain the necessary value.
-Think of this value for `AttackingTeamProbabilty_xy` as a kind of
-breakeven probability. This is what those probabilities look like -
+value `ExpectedAttackTargetPV_xy` must be in each part of the pitch for
+it to compensate for `ExpectedDefenseingDeltaPV_xy`, and therefore we
+can also calculate the minimum value `AttackProbabilty_xy` should be for
+`ExpectedAttackTargetPV_xy` to attain the necessary value. Think of this
+value for `AttackProbabilty_xy` as a kind of breakeven probability. This
+is what those probabilities look like -
 
 ![](README_files/figure-markdown_strict/PVBreakEven-1.png)
 
@@ -106,17 +127,20 @@ length of the pitch. Only Ederson can make such passes. We consider the
 area that is within a radius of 2/3 length of the pitch at any point of
 time and ignore everything outside of it.
 
-We can expect `ExpectedDefendingDeltaPV_xy` to be positive very often,
-since `DefendingOriginPV` is a negative value so the more interesting
+We can expect `ExpectedDefenseDeltaPV_xy` to be positive very often,
+since `DefenseOriginPV` is a negative value so the more interesting
 thing to analyse would be `ExpectedAttackingDeltaPV_xy`. A positive
 `ExpectedAttackingDeltaPV_xy` implies that passing the ball to that
 point on the pitch is likely to increase the chance of scoring even
 after considering the risk of conceding the ball.
 
-## Illustration
+## Demonstration
 
-I chose this example because it also highlights the problem I mentioned
-above while hopefully also giving you an idea of the concept.
+### An Example Frame
+
+I use one frame to give an example of how all that I said above comes
+together. I chose this example because it also highlights the problem I
+mentioned above while hopefully also giving you an idea of the concept.
 
 Here is what the pitch control looks like in one of the frames. In my
 calculations I exclude players that are offside so the two players from
@@ -137,15 +161,18 @@ then there is the tricky area near the opposition goal, which has a
 larger `ExpectedAttackingDeltaPV_xy` than the middle of the pitch. As a
 result of this problem, the logic above would suggest that in this
 situation the optimal action for the team in possession, the blue team,
-should be to pass the ball all the way to the goal.
+should be to pass the ball all the way to the goal and hope that the
+small chance of another player from the same team controlling the ball
+pays off for the high reward you’d get from successfully controlling the
+ball at that location.
 
-## Observations
+### Full game
 
-I’ll use game 1 from Metrica Sports release available here -
+I’ll use game 1 from Metrica Sports’ release available here -
 <https://github.com/metrica-sports/sample-data/tree/master/data/Sample_Game_1>
 to show some uses for this approach.
 
-### Team level
+#### Team - Distributions
 
 Let us look at the proportion of the pitch that offers a net gain in
 expected PV for the attacking team. This is simply checking how much of
@@ -158,7 +185,7 @@ each instant the team had possession of the ball.
     that offers a positive net expected delta PV for the attacking team.
 -   30% to 40% of the time there is less than 1% of the pitch which
     offers a positive `ExpectedAttackingDeltaPV_xy` for both the teams.
-    It is exactly 0 in 14% when the home team has the ball and 9% when
+    It is exactly 0 in 19% when the home team has the ball and 11% when
     the away team has the ball. A value of 0% means the team in
     possession of the ball has no options on the pitch to pass to where
     they are expected to increase their chances of scoring by enough to
@@ -181,42 +208,22 @@ instant of the game, what delta PV could they expect?
 
 ![](README_files/figure-markdown_strict/AllEPV-1.png)
 
--   From the earlier histogram, we saw most of the pitch is usually
-    negative expected delta PV so it isn’t surprising that this
+-   From the earlier histogram, we saw most of the pitch usually offers
+    a negative expected delta PV so it isn’t surprising that this
     distribution is completely in the negative. What this means is that
     a random pass is more likely to help the defending team than an
     attacking team.
 
-Let us instead focus on the maximum expected delta PV gain at any
-instant as that is indicative of the best option to pass for the
-attacking team.
+If we had a model to predict probabilities of passing to areas on the
+pitch that would have been nice but we don’t. Instead, we’ll look at the
+maximum `ExpectedAttackingDeltaPV_xy` at any instant as that number is
+more indicative of the best option to pass for the attacking team at any
+instant.
 
 ![](README_files/figure-markdown_strict/PositiveEPV-1.png)
 
-The proportion of time between -1 and 2% is:
-
-    ## <table>
-    ##  <thead>
-    ##   <tr>
-    ##    <th style="text-align:left;"> Team </th>
-    ##    <th style="text-align:left;"> HighTeamMaxDeltaPVActual_pct </th>
-    ##   </tr>
-    ##  </thead>
-    ## <tbody>
-    ##   <tr>
-    ##    <td style="text-align:left;"> A </td>
-    ##    <td style="text-align:left;"> 94% </td>
-    ##   </tr>
-    ##   <tr>
-    ##    <td style="text-align:left;"> H </td>
-    ##    <td style="text-align:left;"> 94% </td>
-    ##   </tr>
-    ## </tbody>
-    ## </table>
-
-This means most of the time the optimal action available to the
-attacking team has very low values of `ExpectedAttackingDeltaPV_xy`, if
-at all. The proportion of time between -1% and 2% is -
+Most of the time, the best option offers an
+`ExpectedAttackingDeltaPV_xy` between -1% and 2% for both teams:
 
 <table>
 <thead>
@@ -225,7 +232,7 @@ at all. The proportion of time between -1% and 2% is -
 Team
 </th>
 <th style="text-align:left;">
-LowTeamMaxDeltaPVActual\_pct
+HighAttackMaxDeltaPVIntent\_pct
 </th>
 </tr>
 </thead>
@@ -235,7 +242,7 @@ LowTeamMaxDeltaPVActual\_pct
 A
 </td>
 <td style="text-align:left;">
-94%
+96%
 </td>
 </tr>
 <tr>
@@ -243,22 +250,61 @@ A
 H
 </td>
 <td style="text-align:left;">
-94%
+95%
 </td>
 </tr>
 </tbody>
 </table>
 
-### Team - Time level trends
+The proportion of time above 2% is -
+
+<table>
+<thead>
+<tr>
+<th style="text-align:left;">
+Team
+</th>
+<th style="text-align:left;">
+LowAttackMaxDeltaPVIntent\_pct
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;">
+A
+</td>
+<td style="text-align:left;">
+3%
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+H
+</td>
+<td style="text-align:left;">
+4%
+</td>
+</tr>
+</tbody>
+</table>
+
+While the gain in PV might be large if some of these passes are
+successful, when you balance them out for the probability of those
+passes being unsuccessful, then the team in possession doesn’t usually
+have a chance to attempt an action which offers a high probability large
+gain in PV.
+
+#### Team - observations in time
 
 ![](README_files/figure-markdown_strict/PositiveEPVPlayerTimeline-1.png)
 
 -   Most of the high value expected delta PV for the attacking team, for
     either of the teams, is concentrated in time, which means they are
-    just multiple frames from a much fewer number of instances. This
-    means that for the most part the teams operate in a very low
-    expected reward sort of situation and it is rare for a team to get a
-    good opportunity to significantly progress the ball.
+    just multiple frames from a much fewer number of instances. For the
+    most part the teams operate in a very low expected reward sort of
+    situation.
+
 -   You can see some patterns across the game, for instance the home
     team had a couple of very good chances to progress the ball towards
     the start of the game and had other chances through the game as
@@ -266,7 +312,7 @@ H
     towards the end of the game but not much during the earlier part of
     the game.
 
-### Team - Space level trends
+#### Team - observations in space
 
 The location of the highest expected delta PV at each instant during the
 sample of frames looks like as below.
@@ -282,14 +328,12 @@ sample of frames looks like as below.
     whereas the home team has better options more often on the right
     side deeper in their own half, and more often on the left side more
     advanced in their own half.
--   Both team have a preference towards the left side of the pitch in
-    the final third.
 
 ### Instances of high positive expected delta PV
 
 Let’s see what sort of potential passes show up if we filter for the
 maximum `ExpectedAttackingDeltaPV_xy` value at any frame &gt;
-TeamDeltaPVThreshold. Again, these are potential passes that *could*
+AttackDeltaPVThreshold. Again, these are potential passes that *could*
 have been played and not necessarily the actual pass that was played at
 the time. There may also have been more than one such pass at any frame
 but we will pick only the one with the maximum
@@ -314,40 +358,46 @@ all we have.
 ## Adjusting for passing ability
 
 A lot of the high positive expected delta PV passes are quite long
-passes, and long passes are likely to fetch more PV because it usually
-gets you much closer to the goal from where you were before. But it is
-also much harder to execute such passes. A player may want to aim for
-the most optimal target location but could end up playing the pass to an
-area near the the target. What we saw above accounts for intention, but
-we also need to account for exectuion to evaluate a more realistic
-`ExpectedAttackingDeltaPV_xy`.
+passes or at the edges of the pitch. Long passes are likely to fetch
+more PV because it usually gets you much closer to the goal from where
+you were before. Edges of the pitch are likely more attractive because
+Defenders will tend to stay towards the inside of attacking players. It
+is also much harder to execute such passes. The risk of passing the ball
+out of bounds, or not being able to pass exactly to the point a player
+wants to is much higher for these passes than it would be for less
+rewarding passes. Until now we were looking at an outcome based
+`ExpectedAttackingDeltaPV_xy` but if we now switch it to an intention
+based `ExpectedAttackingDeltaPV_xy` then we would need to incorporate
+these risks in the reward we assign to an action.
 
 To incorporate that, I add some noise to the pass end location as a
 function of the length of the pass. What this noise basically does is
 that it assumes that a pass targeted at a particular location x,y could
 go anywhere in the neighbourhood of x,y depending on how far x,y is from
 the pass origin location. The longer the pass, the more the magnitude of
-the noise. The noise is spread as a two dimensional gaussian around the
-target location being aimed at. This definitely needs more rigorous
-work, in terms of understanding the distribution of how a pass can be
-off target but this is a reasonable simple assumption to get started
-with to illustrate the concept at least.
+the noise. For passes towards the edges of the pitch, the probability
+that a ball is passed out of bound is considered as a turnover with the
+throw in being taken from the closest part of the pitch to the out of
+bound location. The noise is spread as a two dimensional gaussian around
+the target location being aimed at with the spread of the gaussian being
+a function of the distance of the attempt pass.
 
-The `ExpectedAttackingDeltaPV_xy` value now needs to be updated with the
-pitch control and the possession value of the neighbouring areas and the
-probability of the pass going to those neighbouring areas.
+There are things you can nitpick on as being too simplistic but again
+this is about presenting the concept. I don’t have access to the kind of
+data required to merit building a more robust model so I’m not even
+going to try.
 
-Once do that, here is how the numbers change. Not significantly, but
-slightly. I’m calling this set of numbers the actual numbers and the
-earlier set of numbers the ideal numbers.
+Here is how the numbers change with the updated
+`ExpectedAttackingDeltaPV_xy`, which we will call
+`IntentExpectedAttackingDeltaPV_xy`.
 
-![](README_files/figure-markdown_strict/PositiveProportionActual-1.png)
+![](README_files/figure-markdown_strict/PositiveProportionIntent-1.png)
 
-![](README_files/figure-markdown_strict/PositiveEPVActual-1.png)
+![](README_files/figure-markdown_strict/PositiveEPVIntent-1.png)
 
-![](README_files/figure-markdown_strict/PitchTrendActual-1.png)
+![](README_files/figure-markdown_strict/PitchTrendIntent-1.png)
 
-![](README_files/figure-markdown_strict/OriginTargetActual-1.png)
+![](README_files/figure-markdown_strict/OriginTargetIntent-1.png)
 
 -   The distributions don’t move significantly but they do move a little
     bit towards the direction of lower possible gains. This makes sense,
@@ -362,425 +412,22 @@ earlier set of numbers the ideal numbers.
     incorporated in the model though, because the locations are still
     clumped tightly
 
-### Player level - Recipient
+Here is a distribution of the distance between the Intent optimal pass
+location and the Outcome optimal pass location by the pass distance.
 
-We calculated `ExpectedAttackingDeltaPV_xy` and
-`ExpectedDefendingDeltaPV_xy` at a team level above. We can now
-distribute that amongst the players of the attacking and defending team
-respectively in proportion to their pitch control probability at that
-part of the pitch:
+![](README_files/figure-markdown_strict/DistanceChange-1.png)
 
--   `PlayerExpectedAttackingDeltaPV_xy = ExpectedAttackingDeltaPV_xy * PlayerPitchControlProbability_xy / AttackingTeamPitchControlProbability_xy`
--   `PlayerExpectedDefendingDeltaPV_xy = ExpectedDefendingDeltaPV_xy * PlayerPitchControlProbability_xy / DefendingTeamPitchControlProbability_xy`
+Longer passes are more likely to be in areas with small pockets of space
+so the fact that we include the possibility of slightly wayward passes
+means the reward of *intending* to pass to them reduces and the optimal
+passes tend to become shorter. It’s a little odd that the longest passes
+aren’t as compromised as the medium range passes though, and I suspect
+it’s the goalkeeper area being tricky again. ( If I had to argue against
+this I’d say that we use a distance based noise function because we
+expect longer passes to be harder to execute and therefore The trend of
+longer passes seeing a more drastic change might be a self-fulfilling
+result. )
 
-The max of these values across the entire space of the pitch at each
-instant during the game tells us what is the best option an individual
-player offers. Various aggregations of these values over the game could
-give us an indication of the contribution of a player.
+As an illustration -
 
-We will use the actual version of the numbers and not the ideal version
-of the numbers.
-
-![](README_files/figure-markdown_strict/PositiveEPVPlayer-1.png)
-
-The percent of time players offer a high ( &gt; 0.01 )
-`PlayerExpectedAttackingDeltaPV_xy` value:
-
-<table>
-<thead>
-<tr>
-<th style="text-align:left;">
-Player
-</th>
-<th style="text-align:left;">
-HighPlayerMaxDeltaPVActual\_pct
-</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:left;">
-A - CM
-</td>
-<td style="text-align:left;">
-9%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - CF
-</td>
-<td style="text-align:left;">
-9%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - CAM
-</td>
-<td style="text-align:left;">
-5%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - LF
-</td>
-<td style="text-align:left;">
-5%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - RW
-</td>
-<td style="text-align:left;">
-5%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - RF
-</td>
-<td style="text-align:left;">
-4%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - RCB
-</td>
-<td style="text-align:left;">
-2%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - LWB
-</td>
-<td style="text-align:left;">
-18%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - LW
-</td>
-<td style="text-align:left;">
-15%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - RWB
-</td>
-<td style="text-align:left;">
-11%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - RCB
-</td>
-<td style="text-align:left;">
-1%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - LCB
-</td>
-<td style="text-align:left;">
-1%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - LCM
-</td>
-<td style="text-align:left;">
-1%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - GK
-</td>
-<td style="text-align:left;">
-0%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - RCM
-</td>
-<td style="text-align:left;">
-0%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - CB
-</td>
-<td style="text-align:left;">
-0%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - RCM
-</td>
-<td style="text-align:left;">
-0%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - LCB
-</td>
-<td style="text-align:left;">
-0%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - LCM
-</td>
-<td style="text-align:left;">
-0%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - GK
-</td>
-<td style="text-align:left;">
-0%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - LB
-</td>
-<td style="text-align:left;">
-0%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - RB
-</td>
-<td style="text-align:left;">
-0%
-</td>
-</tr>
-</tbody>
-</table>
-
--   Again, almost all of it lies between -1% to 1%.
-
--   The away team is a little better than the home team though, with a
-    higher proportion of occurrence in the 0% to 1% band and less in the
-    -1% to 0% compared to the home team.
-
--   The occurrence of high values is very low, which we could already
-    have guessed from the team level distributions.
-
-The locations of high progression opportunities,
-`PlayerExpectedAttackingDeltaPV_xy` &gt; 0.01, are as below -
-
-![](README_files/figure-markdown_strict/PositiveEPVPlayerGT1-1.png)
-
-### Player level - Passer
-
-Usually the passer is credited with the PV gained from a pass so we
-should also look at what opportunities the rest of the team presents to
-them, including the player in possession themselves.
-
-![](README_files/figure-markdown_strict/PositiveEPVPlayerPasser-1.png)
-
-<table>
-<thead>
-<tr>
-<th style="text-align:left;">
-Player
-</th>
-<th style="text-align:left;">
-HighPlayerMaxDeltaPVActual\_pct
-</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:left;">
-A - CM
-</td>
-<td style="text-align:left;">
-9%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - RB
-</td>
-<td style="text-align:left;">
-9%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - CB
-</td>
-<td style="text-align:left;">
-8%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - LWB
-</td>
-<td style="text-align:left;">
-8%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - LB
-</td>
-<td style="text-align:left;">
-8%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - RW
-</td>
-<td style="text-align:left;">
-8%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - LCM
-</td>
-<td style="text-align:left;">
-7%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - RCB
-</td>
-<td style="text-align:left;">
-6%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - LCB
-</td>
-<td style="text-align:left;">
-5%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - RCM
-</td>
-<td style="text-align:left;">
-4%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - LF
-</td>
-<td style="text-align:left;">
-30%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - RCB
-</td>
-<td style="text-align:left;">
-3%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - CAM
-</td>
-<td style="text-align:left;">
-19%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - RWB
-</td>
-<td style="text-align:left;">
-17%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - CF
-</td>
-<td style="text-align:left;">
-12%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - RCM
-</td>
-<td style="text-align:left;">
-11%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - LCM
-</td>
-<td style="text-align:left;">
-11%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - LCB
-</td>
-<td style="text-align:left;">
-10%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-H - LW
-</td>
-<td style="text-align:left;">
-10%
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-A - RF
-</td>
-<td style="text-align:left;">
-0%
-</td>
-</tr>
-</tbody>
-</table>
-
-![](README_files/figure-markdown_strict/PositiveEPVPlayerGT1Passer-1.png)
-
-### Using Player Level Metrics To Evalaute Player Performance
-
-At each stretch of possession for a player, they have multiple
-opportunities to play a pass. Using the metric of expected delta PV, we
-can evaluate what kind of choices they had during that stretch of
-possession and compare it to the choice they finally made and how sub
-optimal that choice was. Players who have an eye for good passes should
-make choices close to optimal very often. Have to add this bit of code.
+![](README_files/figure-markdown_strict/IntentIllustrationData-1.png)![](README_files/figure-markdown_strict/IntentIllustrationData-2.png)![](README_files/figure-markdown_strict/IntentIllustrationData-3.png)
