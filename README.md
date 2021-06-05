@@ -319,8 +319,8 @@ multiple times.
 
 ### Intent vs. Outcome
 
-*This is point of this post.* Thanks for staying with me until now. All
-the stuff above was to get you comfortable with the setting which
+**This is point of this post.** Thanks for staying with me until now.
+All the stuff above was to get you comfortable with the setting which
 hopefully you are by now.
 
 Note how most high value `AttackEPVAdded_xy` passes are long passes,

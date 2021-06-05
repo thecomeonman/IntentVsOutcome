@@ -433,7 +433,7 @@ p1 = ggplot() +
         aes(x = X, y = Y, color = Tag)
     ) +
     geom_pitch(cPitchColour = 'transparent', cLineColour = '#CCCCCC') +
-    scale_fill_gradient2(midpoint = 0, high = 'blue', low = 'red', labels = percent, name = 'Expected delta PV') +
+    scale_fill_gradient2(midpoint = 0, high = 'blue', low = 'red', labels = percent, name = 'EPV added') +
     scale_color_discrete(name = 'Team') +
     theme_pitch()
     
@@ -845,7 +845,7 @@ if ( T ) {
 
 ### Intent vs. Outcome
 
-*This is point of this post.* Thanks for staying with me until now. All the stuff above was to get you comfortable with the setting which hopefully you are by now.
+**This is point of this post.** Thanks for staying with me until now. All the stuff above was to get you comfortable with the setting which hopefully you are by now.
 
 Note how most high value `AttackEPVAdded_xy` passes are long passes, often aimed at the edges of the pitch. Long passes are likely to fetch more PV because it usually gets you much closer to the goal from where the ball was before. Edges of the pitch are more attractive because Defenders will tend to stay towards the insides of the pitch leaving one side less for a defensive impact on the attackers staying closer to the edges of the pitch. This is expected.
 
@@ -1090,7 +1090,7 @@ pChangePitchControl = ggplot() +
         aes(x = X, y = Y, color = Tag)
     ) +
   scale_color_discrete(name = 'Team') +
-  scale_fill_gradient2(low = 'red', high = 'blue', mid = 'white', midpoint = 0, labels = percent, name = 'Change in\nattack team\ncontrol prob.') +
+  scale_fill_gradient2(low = 'red', high = 'blue', mid = 'white', midpoint = 0, labels = percent, name = 'Intent - outcome\nattack team\ncontrol prob.') +
   geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
   # facet_wrap(~Facet) + 
   theme_pitch()
@@ -1196,7 +1196,7 @@ pChangePV = ggplot() +
       aes(x = X, y = Y, color = Tag)
   ) +
   scale_color_discrete(name = 'Team') +
-  scale_fill_gradient2(low = 'red', high = 'blue', mid = 'white', midpoint = 0, labels = percent, name = 'Expected\ndelta PV') +
+  scale_fill_gradient2(low = 'red', high = 'blue', mid = 'white', midpoint = 0, labels = percent, name = 'EPV added') +
   geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
   facet_wrap(~Facet) +
   theme_pitch()
@@ -1247,7 +1247,7 @@ pChangePV = ggplot() +
     ) +
 
   scale_color_discrete(name = 'Team') +
-  scale_fill_gradient2(low = 'red', high = 'blue', mid = 'white', midpoint = 0, labels = percent, name = 'Change in\nexpected\ndelta PV') +  
+  scale_fill_gradient2(low = 'red', high = 'blue', mid = 'white', midpoint = 0, labels = percent, name = 'Intent - outcome\nEPV added') +  
   geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
   # facet_wrap(~Facet) +
   theme_pitch()
@@ -1314,7 +1314,7 @@ pChangePV = ggplot() +
       shape = 3
   ) +
   scale_color_discrete(name = 'Team') +
-  scale_fill_gradient2(low = 'red', high = 'blue', mid = 'white', midpoint = 0, labels = percent, name = 'Expected delta PV') +
+  scale_fill_gradient2(low = 'red', high = 'blue', mid = 'white', midpoint = 0, labels = percent, name = 'EPV added') +
   geom_pitch(cLineColour = '#CCCCCC', cPitchColour = 'transparent') +
   facet_wrap(~Facet) +
   theme_pitch()
@@ -1335,8 +1335,8 @@ ggplot(dtPVDelta) +
   geom_point(aes(x = AttackMaxDeltaPV, y = AttackMaxDeltaPVIntent - AttackMaxDeltaPV)) +
   facet_wrap(~Team) +
   # coord_fixed() +
-  scale_y_continuous(label = percent, name = 'Intent based - outcome based expected max delta PV') +
-  scale_x_continuous(label = percent, name = 'Outcome based expected max delta PV')
+  scale_y_continuous(label = percent, name = 'Intent based - outcome based max EPV added') +
+  scale_x_continuous(label = percent, name = 'Outcome based max EPV added')
 
 ```
 
