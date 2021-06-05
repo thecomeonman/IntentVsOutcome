@@ -386,7 +386,10 @@ probability of that actual target location.
 
 ### Combining Pitch Control, Possession Value, and Intent - Example
 
-Another one frame example to give you an idea of how this manifests -
+Another one frame example to give you an idea of how this manifests.
+From here on, the charts marked outcome are the same set of numbers from
+the charts in the earlier section and the charts marked intent are the
+new set of numbers.
 
 ![](README_files/figure-markdown_strict/IntentIllustrationComparison-1.png)
 
@@ -445,9 +448,7 @@ comparison of the change -
     `ExpectedAttackMaxDeltaPV`. This is expected since a lot of these
     were near the edges of the pitch or very long passes.
 
-Here are the rest of the distributions with the comparisons. The charts
-marked outcome are the same as the charts in the earlier section and the
-charts marked intent are the new set of numbers.
+Here are the rest of the distributions with the comparisons.
 
 ![](README_files/figure-markdown_strict/PositiveProportionIntent-1.png)
 
