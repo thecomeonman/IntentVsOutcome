@@ -86,36 +86,35 @@ offer progress to the team in possession.
 -   At every point, `(x,y)`, we can estimate an expected PV for playing
     a pass there:
     -   For the attacking team,
-        `ExpectedAttackTargetPV = ( AttackProbabilty_xy * AttackTargetPV_xy ) - ( DefenseProbabilty_xy * DefenseTargetPV_xy )`
+        `AttackTargetEPV = ( AttackProbabilty_xy * AttackTargetPV_xy ) - ( DefenseProbabilty_xy * DefenseTargetPV_xy )`
     -   For the defending team, which is the same as the above formula
         with the attacking / defending terms exchanged,
-        `ExpectedDefenseTargetPV = ( DefenseProbabilty_xy * DefenseTargetPV_xy ) - ( AttackProbabilty_xy * AttackTargetPV_xy )`
+        `DefenseTargetEPV = ( DefenseProbabilty_xy * DefenseTargetPV_xy ) - ( AttackProbabilty_xy * AttackTargetPV_xy )`
 -   The expected change in PV from the current position can be
     calculated as the difference of the above terms from the PV of the
     starting position:
     -   For the attacking team,
-        `ExpectedAttackDeltaPV_xy = ExpectedAttackTargetPV_xy - AttackOriginPV`
+        `AttackEPVAdded_xy = AttackTargetEPV_xy - AttackOriginPV`
     -   For the defending team,
-        `ExpectedDefenseDeltaPV_xy = ExpectedDefenseTargetPV_xy - DefenseOriginPV`
-        A positive `ExpectedAttackDeltaPV_xy` implies that passing the
-        ball to that point on the pitch is likely to increase the chance
-        of scoring even after considering the risk of conceding the
-        ball. A negative value implies that passing the ball to that
-        point is likely going to decrease the chance of scoring.
+        `DefenseEPVAdded_xy = DefenseTargetEPV_xy - DefenseOriginPV` A
+        positive `AttackEPVAdded_xy` implies that passing the ball to
+        that point on the pitch is likely to increase the chance of
+        scoring even after considering the risk of conceding the ball. A
+        negative value implies that passing the ball to that point is
+        likely going to decrease the chance of scoring.
 -   At any point, the optimal action for the attacking team to perform
     should be to move the ball to a point which offers the highest
-    `ExpectedAttackTargetPV`. We’ll call the expected delta PV at that
-    point `ExpectedAttackMaxDeltaPV`. This value may not always be
-    positive.
+    `AttackTargetEPV`. We’ll call the EPV added at that point
+    `AttackMaxEPVAdded`. This value may not always be positive.
 
 I ignore the possibility of passes that travel more than 2/3 the length
 of the pitch. Only Ederson can make such passes. We consider the area
 that is within a radius of 2/3 length of the pitch at any point of time
 and ignore everything outside of it.
 
-We can expect `ExpectedDefenseDeltaPV_xy` to be positive very often,
-since `DefenseOriginPV` is a negative value so the more interesting
-thing to analyse would be `ExpectedAttackDeltaPV_xy`.
+We can expect `DefenseEPVAdded_xy` to be positive very often, since
+`DefenseOriginPV` is a negative value so the more interesting thing to
+analyse would be `AttackEPVAdded_xy`.
 
 ### Combining Pitch Control and Possession Value - Example
 
@@ -127,19 +126,18 @@ offside position have zero contribution to pitch control.
 
 ![](README_files/figure-markdown_strict/PitchControlIllustation-1.png)
 
-This is what the pitch looks like in terms of
-`ExpectedAttackDeltaPV_xy`.
+This is what the pitch looks like in terms of `AttackEPVAdded_xy`.
 
 ![](README_files/figure-markdown_strict/EPVIllustationTeam-1.png)
 
 There is some territory in the middle of the pitch where passing the
-ball is expected to return a positive `ExpectedAttackDeltaPV_xy`. And
-then there is an area near the opposition goal, which has a larger
-`ExpectedAttackDeltaPV_xy` than the middle of the pitch. This area
-lights up because 1, the goalkeeper isn’t given extra powers to control
-the ball in the pitch control model which is not the case in real life
-since keepers can catch the ball with their hands, dive on it, etc. and
-2, pitch control is only reflective of passes, not shots. As a result of
+ball is expected to return a positive `AttackEPVAdded_xy`. And then
+there is an area near the opposition goal, which has a larger
+`AttackEPVAdded_xy` than the middle of the pitch. This area lights up
+because 1, the goalkeeper isn’t given extra powers to control the ball
+in the pitch control model which is not the case in real life since
+keepers can catch the ball with their hands, dive on it, etc. and 2,
+pitch control is only reflective of passes, not shots. As a result of
 this inconsistency, the logic above would suggest that in this situation
 the optimal action for the team in possession, the blue team, should be
 to pass the ball all the way to the goal and hope that the small chance
@@ -159,57 +157,55 @@ The findings WRT to the home and away team obviously don’t carry over to
 all games but the more general inferences probably do.
 
 Let us look at the proportion of the pitch that offers a positive
-`ExpectedAttackDeltaPV_xy` at each instant the team had possession of
-the ball.
+`AttackEPVAdded_xy` at each instant the team had possession of the ball.
 
 ![](README_files/figure-markdown_strict/PositiveProportion-1.png)
 
 -   Most of the time there is a very small part of the pitch, if at all,
-    that offers a positive net expected delta PV for the attacking team.
-    This means there is a very small part of the pitch that the
-    attacking team can pass to and expect their possession value to go
-    up when you factor the risk of conceding the ball.
+    that offers a positive EPV added for the attacking team. This means
+    there is a very small part of the pitch that the attacking team can
+    pass to and expect their possession value to go up when you factor
+    the risk of conceding the ball.
 -   30% to 40% of the time there is less than 1% of the area of the
-    pitch which offers a positive `ExpectedAttackDeltaPV_xy` for both
-    the teams. It is exactly 0% of the area in 19% for the home team and
-    11% for the away team has the ball. A value of 0% for
-    `ExpectedAttackDeltaPV_xy` means the team in possession of the ball
-    has no options on the pitch to pass to where they are expected to
-    increase their chances of scoring by enough to negate the chance of
+    pitch which offers a positive `AttackEPVAdded_xy` for both the
+    teams. It is exactly 0% of the area in 19% for the home team and 11%
+    for the away team has the ball. A value of 0% for
+    `AttackEPVAdded_xy` means the team in possession of the ball has no
+    options on the pitch to pass to where they are expected to increase
+    their chances of scoring by enough to negate the chance of
     conceding. This is very important because a number of times a pass
     is played just to retain possession and not necessarily increase the
     chance of scoring and the typical way PV is applied would give these
     passes a negative score which is unfair because the situation is not
     taken into account.
 -   There is almost never a situation where more than 15% of the area of
-    the pitch offers a positive `ExpectedAttackDeltaPV_xy` for the
-    attacking team.
+    the pitch offers a positive `AttackEPVAdded_xy` for the attacking
+    team.
 -   The away team usually has options over a bigger area of the pitch
     than the home team.
 
-Let us look at the values of the `ExpectedAttackDeltaPV_xy` itself.
+Let us look at the values of the `AttackEPVAdded_xy` itself.
 
 If the team were to randomly pass to any point on the pitch, at each
-instant of the game, what `ExpectedAttackDeltaPV_xy` could they expect?
-This would be the same as averaging the `ExpectedAttackDeltaPV_xy`
-values over the entire pitch and would look like -
+instant of the game, what `AttackEPVAdded_xy` could they expect? This
+would be the same as averaging the `AttackEPVAdded_xy` values over the
+entire pitch and would look like -
 
 ![](README_files/figure-markdown_strict/AllEPV-1.png)
 
 -   From the earlier histogram, we saw most of the pitch usually offers
-    a negative expected delta PV so it isn’t surprising that this
-    distribution is completely in the negative. What this means is that
-    a random pass is more likely to aid the defending team than the
-    attacking team.
+    a negative EPV added so it isn’t surprising that this distribution
+    is completely in the negative. What this means is that a random pass
+    is more likely to aid the defending team than the attacking team.
 
 If we instead look at the best option the team has at any instant,
-`ExpectedAttackMaxDeltaPV` -
+`AttackMaxEPVAdded` -
 
 ![](README_files/figure-markdown_strict/PositiveEPV-1.png)
 
--   Most of the time, the best option offers an
-    `ExpectedAttackMaxDeltaPV` between -1% and 2% for both teams.
-    Specifically the amount of time is -
+-   Most of the time, the best option offers an `AttackMaxEPVAdded`
+    between -1% and 2% for both teams. Specifically the amount of time
+    is -
 
 <table>
 <thead>
@@ -242,7 +238,7 @@ H
 </tbody>
 </table>
 
-The proportion of time `ExpectedAttackMaxDeltaPV` is above 2% -
+The proportion of time `AttackMaxEPVAdded` is above 2% -
 
 <table>
 <thead>
@@ -277,8 +273,8 @@ H
 
 How about where these options are available?
 
-The location offering `ExpectedAttackMaxDeltaPV` at each instant during
-the sample of frames looks like as below. Both teams have almost equal
+The location offering `AttackMaxEPVAdded` at each instant during the
+sample of frames looks like as below. Both teams have almost equal
 possession so don’t worry too much about normalising this chart.
 
 ![](README_files/figure-markdown_strict/PitchTrend-1.png)
@@ -302,16 +298,16 @@ figures. That analysis is not necessary for the point of this post
 anyway so we’ll skip it. This is just warming you up to how we can look
 at things.
 
-If we filter only the frames where `ExpectedMaxAttackDeltaPV_xy` &gt;
-0.02, these are the frames which had at least one pass which allowed the
-team to make substantial progress towards scoring. Note that these are
-potential passes that *could* have been played and not necessarily the
-actual pass that was played at the time. There may also have been more
-than one such pass at any frame but we will pick only the one with the
-`ExpectedMaxAttackDeltaPV_xy` value. It’s also likely that during the
-course of the play, a similar kind of pass continued to remain the
-optimal choice for consecutive frames in the sample and you would
-therefore see it multiple times.
+If we filter only the frames where `AttackMaxEPVAdded` &gt; 0.02, these
+are the frames which had at least one pass which allowed the team to
+make substantial progress towards scoring. Note that these are potential
+passes that *could* have been played and not necessarily the actual pass
+that was played at the time. There may also have been more than one such
+pass at any frame but we will pick only the one with the
+`AttackMaxEPVAdded` value. It’s also likely that during the course of
+the play, a similar kind of pass continued to remain the optimal choice
+for consecutive frames in the sample and you would therefore see it
+multiple times.
 
 ![](README_files/figure-markdown_strict/OriginTarget-1.png)
 
@@ -327,32 +323,31 @@ therefore see it multiple times.
 the stuff above was to get you comfortable with the setting which
 hopefully you are by now.
 
-Note how most high value `ExpectedAttackDeltaPV_xy` passes are long
-passes, often aimed at the edges of the pitch. Long passes are likely to
-fetch more PV because it usually gets you much closer to the goal from
-where the ball was before. Edges of the pitch are more attractive
-because Defenders will tend to stay towards the insides of the pitch
-leaving one side less for a defensive impact on the attackers staying
-closer to the edges of the pitch. This is expected.
+Note how most high value `AttackEPVAdded_xy` passes are long passes,
+often aimed at the edges of the pitch. Long passes are likely to fetch
+more PV because it usually gets you much closer to the goal from where
+the ball was before. Edges of the pitch are more attractive because
+Defenders will tend to stay towards the insides of the pitch leaving one
+side less for a defensive impact on the attackers staying closer to the
+edges of the pitch. This is expected.
 
 The reason I started writing is because while these are rewarding passes
 if they actually happen, it is also much harder to execute such passes
 and that difficulty does not get considered in the current pitch control
 and possession value models. The risk of passing the ball out of bounds,
-or not being able to pass accurately to the point with the maximum
-expected delta PV is much higher for such passes compared to easier
-passes to someone in the middle of the pitch or to someone closer to the
-player in possession. Until now we were looking at an outcome based
-`ExpectedMaxAttackDeltaPV_xy` i.e. the delta PV the team could expect to
-gain if the ball reached a particular `(x.y)` but if we switch to an
-intention based `ExpectedAttackDeltaPV_xy`, i.e. the delta PV the team
-could expect to gain if the ball was attempted to be passed to a
-particular `(x.y)` then we would need to incorporate the risks of
-inaccuracy in passing. Note that the term inaccuracy is typically used
-to describe whether a pass was successfully received by a teammate but
-in this post it is being used to describe whether a pass intended for a
-particular location actually reaches that location or goes somewhere
-else.
+or not being able to pass accurately to the point with the maximum EPV
+added is much higher for such passes compared to easier passes to
+someone in the middle of the pitch or to someone closer to the player in
+possession. Until now we were looking at an outcome based
+`AttackMaxEPVAdded` i.e. the EPV the team could expect to gain if the
+ball reached a particular `(x.y)` but if we switch to an intention based
+`AttackEPVAdded_xy`, i.e. the EPV the team could expect to gain if the
+ball was attempted to be passed to a particular `(x.y)` then we would
+need to incorporate the risks of inaccuracy in passing. Note that the
+term inaccuracy is typically used to describe whether a pass was
+successfully received by a teammate but in this post it is being used to
+describe whether a pass intended for a particular location actually
+reaches that location or goes somewhere else.
 
 ![](README_files/figure-markdown_strict/IntentIllustrationPlot1-1.png)
 
@@ -416,7 +411,7 @@ Again note the change in the colour scale -
     domainated by either team.
 
 What difference does that translate to in terms of the
-`ExpectedAttackDeltaPV_xy`
+`AttackEPVAdded_xy`
 
 ![](README_files/figure-markdown_strict/IntentIllustrationComparisonPV-1.png)
 
@@ -443,10 +438,10 @@ comparison of the change -
 
 ![](README_files/figure-markdown_strict/IntentOutcomeScatter-1.png)
 
--   Most high outcome based `ExpectedAttackMaxDeltaPV` values take a hit
-    when you compare them to the corresponding intent based
-    `ExpectedAttackMaxDeltaPV`. This is expected since a lot of these
-    were near the edges of the pitch or very long passes.
+-   Most high outcome based `AttackMaxEPVAdded` values take a hit when
+    you compare them to the corresponding intent based
+    `AttackMaxEPVAdded`. This is expected since a lot of these were near
+    the edges of the pitch or very long passes.
 
 Here are the rest of the distributions with the comparisons.
 
@@ -454,8 +449,8 @@ Here are the rest of the distributions with the comparisons.
 
 -   You can see a shift in the distribution towards the left, from
     having larger parts of the pitch having a positive
-    `ExpectedAttackDeltaPV_xy` in the outcome version of the model to
-    smaller parts of the pitch in the intent version of the model.
+    `AttackEPVAdded_xy` in the outcome version of the model to smaller
+    parts of the pitch in the intent version of the model.
 
 The other distributions also change in a similar manner -
 
@@ -465,17 +460,15 @@ The other distributions also change in a similar manner -
 
 ![](README_files/figure-markdown_strict/OriginTargetIntent-1.png)
 
--   The distributions move towards lower possible
-    `ExpectedAttackMaxDeltaPV` values. This makes sense, you’d expect
-    ådding noise would reduce the reward possible from the optimal
-    choice.
+-   The distributions move towards lower possible `AttackMaxEPVAdded`
+    values. This makes sense, you’d expect ådding noise would reduce the
+    reward possible from the optimal choice.
 -   Note how the intent based model suggests fewer passes right at the
     goal mouth or at the edge of the pitch on the wings and has much
-    fewer opportunities for high `ExpectedAttackMaxDeltaPV` passes.
-    These were the kind of passes where there is a chance of the ball
-    going out of bounds as well or not being hit exactly at the target
-    which get penalised in the intent model but not in the outcome
-    model.
+    fewer opportunities for high `AttackMaxEPVAdded` passes. These were
+    the kind of passes where there is a chance of the ball going out of
+    bounds as well or not being hit exactly at the target which get
+    penalised in the intent model but not in the outcome model.
 
 Here is a distribution of the difference in distance between the optimal
 intent based pass distance and the optimal outcome based pass distance
