@@ -326,7 +326,7 @@ you are by now.
 
 Note how most high value `AttackEPVAdded_xy` passes are long passes,
 often aimed at the edges of the pitch. Note how the optimal targets are
-also concentrateda around the edges of the pitch. Long passes are likely
+also concentrated around the edges of the pitch. Long passes are likely
 to fetch more PV because it usually gets you much closer to the goal
 from where the ball was before. Edges of the pitch are more attractive
 because defenders will tend to stay towards the insides of the pitch
@@ -334,13 +334,19 @@ leaving one side less for a defender to impact the pitch control of a
 wide positioned player from the attacking team. This is expected.
 
 The reason I started writing is because while these are rewarding passes
-if they actually happen, it is also much harder to execute such passes
-and that difficulty does not get considered in the current pitch control
-and possession value models. The risk of passing the ball out of bounds,
-or not being able to pass accurately to the point with the maximum EPV
-added is much higher for such passes compared to easier passes to
-someone in the middle of the pitch or to someone closer to the player in
-possession. Until now we were looking at an outcome based
+if they actually happen, it is also much harder to execute such passes.
+In the EPV paper, there is a pass probability component which is a
+logistic regression model but if it is like most other pass probability
+models then it is also modelling the probability of accurately passing
+to a particular point on the pitch and the training data is probably
+based on historic pass data which are again outcomes. I think there is
+room to improve this.
+
+The risk of passing the ball out of bounds, or not being able to pass
+accurately to the point with the maximum EPV added is much higher for
+passes close to the sidelines, long passes, and so on compared to easier
+passes to someone in the middle of the pitch or to someone closer to the
+player in possession. Until now we were looking at an outcome based
 `AttackMaxEPVAdded` i.e. the EPV the team could expect to gain if the
 ball reached a particular `(x.y)` but if we switch to an intention based
 `AttackEPVAdded_xy`, i.e. the EPV the team could expect to gain if the
@@ -383,6 +389,11 @@ pitch control and expected possession values for each intended target
 location by aggregating the outcome based pitch control and expected
 possession values of all its actual target locations weighed by the the
 probability of that actual target location.
+
+This is not the same as just having a pass distance feature in the pass
+probability logistic regression model. We are redefining pitch control
+and possession value altogether by differentiating what they mean for a
+receiver and what they mean for a passer.
 
 ### Combining Pitch Control, Possession Value, and Intent - Example
 
