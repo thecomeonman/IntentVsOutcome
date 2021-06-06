@@ -9,20 +9,24 @@ guys.
 
 ## Introduction
 
-<http://www.lukebornn.com/papers/fernandez_sloan_2019.pdf> comes up with
-a probabilistic possession value based on combining the possession value
-( PV ) of the part of the pitch from a PV model, the probability of the
+<http://www.lukebornn.com/papers/fernandez_sloan_2019.pdf> proposes a
+probabilistic possession value based on combining the possession value (
+PV ) of the part of the pitch from a PV model, the probability of the
 ball being controlled in the part of the pitch from a pitch control
-model, and the probability of the ball being played to that part of the
-pitch from an action likelihood model. These numbers can then be used to
-infer passing tendencies, awareness, positioning, and many other things.
+model, the pass difficulty from a pass probability model, and the
+probability of the ball being played to that part of the pitch from an
+action likelihood model. These numbers can then be used to infer passing
+tendencies, awareness, positioning, and many other things.
 
-Pitch control and action likelihood are *outcome* based models. Pitch
-control tells you the probability of controlling the ball if it were
-played to that part of the pitch. Action likelihood is also probably
-based on data from what *happened* in actual matches. An additional
-aspect we need to evaluate things like player decision making is
-*intent*. That’s what the rest of the post is about.
+Pitch control, pass probability, and action likelihood are *outcome*
+based models. Pitch control tells you the probability of controlling the
+ball if it were played to that part of the pitch. Pass probability tells
+you the probability of successfully making a pass to a particular point
+on the pitch and is likely based on historic pass data which means it is
+outcome based. Action likelihood is also probably based on historic
+match data and is also probably outcome based. An additional aspect we
+need to evaluate things like player decision making is *intent*. That’s
+what the rest of the post is about.
 
 We’ll exclude action likelihood and only look at the output just from
 the possession value and the pitch control models. This lets us evaluate
@@ -33,7 +37,7 @@ If you’re familiar with pitch control and possession value, you can
 probably just glance at the Glossary section and then skip straight to
 the Intent vs. Outcome section.
 
-## Methodology
+## EPV Methodology
 
 ### Pitch Control
 
@@ -318,7 +322,7 @@ multiple times.
     the ball in the box being created from the left wing but they have
     other options as well from other parts of the pitch.
 
-### Intent vs. Outcome
+## Intent vs. Outcome
 
 **This is point of this post.** Thanks for staying with me. All the
 stuff above was to get you comfortable with the setting which hopefully
