@@ -86,26 +86,27 @@ offer progress to the team in possession.
 -   At every point, `(x,y)`, we can estimate an expected PV for playing
     a pass there:
     -   For the attacking team,
-        `AttackTargetEPV = ( AttackProbabilty_xy * AttackTargetPV_xy ) - ( DefenseProbabilty_xy * DefenseTargetPV_xy )`
+        `AttackTargetEPV_xy = ( AttackProbabilty_xy * AttackTargetPV_xy ) - ( DefenseProbabilty_xy * DefenseTargetPV_xy )`
     -   For the defending team, which is the same as the above formula
         with the attacking / defending terms exchanged,
-        `DefenseTargetEPV = ( DefenseProbabilty_xy * DefenseTargetPV_xy ) - ( AttackProbabilty_xy * AttackTargetPV_xy )`
--   The expected change in PV from the current position can be
-    calculated as the difference of the above terms from the PV of the
-    starting position:
+        `DefenseTargetEPV_xy = ( DefenseProbabilty_xy * DefenseTargetPV_xy ) - ( AttackProbabilty_xy * AttackTargetPV_xy )`
+-   The expected change in PV by passing the ball from the current
+    position to a target position can be calculated as the difference of
+    the above terms from the PV of the starting position:
     -   For the attacking team,
         `AttackEPVAdded_xy = AttackTargetEPV_xy - AttackOriginPV`
     -   For the defending team,
-        `DefenseEPVAdded_xy = DefenseTargetEPV_xy - DefenseOriginPV` A
-        positive `AttackEPVAdded_xy` implies that passing the ball to
-        that point on the pitch is likely to increase the chance of
-        scoring even after considering the risk of conceding the ball. A
-        negative value implies that passing the ball to that point is
-        likely going to decrease the chance of scoring.
+        `DefenseEPVAdded_xy = DefenseTargetEPV_xy - DefenseOriginPV`
 -   At any point, the optimal action for the attacking team to perform
     should be to move the ball to a point which offers the highest
-    `AttackTargetEPV`. We’ll call the EPV added at that point
+    `AttackTargetEPV_xy`. We’ll call the EPV added at that point
     `AttackMaxEPVAdded`. This value may not always be positive.
+
+A positive `AttackEPVAdded_xy` implies that passing the ball to that
+point on the pitch is likely to increase the chance of scoring even
+after considering the risk of conceding the ball. A negative value
+implies that passing the ball to that point is likely going to decrease
+the chance of scoring.
 
 I ignore the possibility of passes that travel more than 2/3 the length
 of the pitch. Only Ederson can make such passes. We consider the area
@@ -319,17 +320,18 @@ multiple times.
 
 ### Intent vs. Outcome
 
-**This is point of this post.** Thanks for staying with me until now.
-All the stuff above was to get you comfortable with the setting which
-hopefully you are by now.
+**This is point of this post.** Thanks for staying with me. All the
+stuff above was to get you comfortable with the setting which hopefully
+you are by now.
 
 Note how most high value `AttackEPVAdded_xy` passes are long passes,
-often aimed at the edges of the pitch. Long passes are likely to fetch
-more PV because it usually gets you much closer to the goal from where
-the ball was before. Edges of the pitch are more attractive because
-Defenders will tend to stay towards the insides of the pitch leaving one
-side less for a defensive impact on the attackers staying closer to the
-edges of the pitch. This is expected.
+often aimed at the edges of the pitch. Note how the optimal targets are
+also concentrateda around the edges of the pitch. Long passes are likely
+to fetch more PV because it usually gets you much closer to the goal
+from where the ball was before. Edges of the pitch are more attractive
+because defenders will tend to stay towards the insides of the pitch
+leaving one side less for a defender to impact the pitch control of a
+wide positioned player from the attacking team. This is expected.
 
 The reason I started writing is because while these are rewarding passes
 if they actually happen, it is also much harder to execute such passes
@@ -343,11 +345,14 @@ possession. Until now we were looking at an outcome based
 ball reached a particular `(x.y)` but if we switch to an intention based
 `AttackEPVAdded_xy`, i.e. the EPV the team could expect to gain if the
 ball was attempted to be passed to a particular `(x.y)` then we would
-need to incorporate the risks of inaccuracy in passing. Note that the
-term inaccuracy is typically used to describe whether a pass was
-successfully received by a teammate but in this post it is being used to
-describe whether a pass intended for a particular location actually
-reaches that location or goes somewhere else.
+need to incorporate the risks of inaccuracy in passing. There are other
+factors that could also cause inaccuracy such as pressure on the ball,
+the passer’s body orientation, etc. but for now we will keep it simple
+and consider only the length of the pass and the target location. Note
+that the term inaccuracy is typically used to describe whether a pass
+was successfully received by a teammate but in this post it is being
+used to describe whether a pass intended for a particular location
+actually reaches that location or goes somewhere else.
 
 ![](README_files/figure-markdown_strict/IntentIllustrationPlot1-1.png)
 
@@ -427,9 +432,9 @@ a + -
 ![](README_files/figure-markdown_strict/IntentIllustrationComparisonOptimal-1.png)
 
 The target is still on the right wing, but near the centre line as per
-the intent location whereas the outcome based optimal location is around
-a quarter of the legnth of the pitch farther ahead and much closer to
-the edge of the pitch.
+the intent model whereas the outcome based optimal location is around a
+quarter of the length of the pitch farther ahead and much closer to the
+edge of the pitch.
 
 ### Combining Pitch Control, Possession Value, and Intent
 
