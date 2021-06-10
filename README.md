@@ -542,6 +542,22 @@ and evaluating the options better than an outcome based model.
 </tbody>
 </table>
 
+## Extending this to other actions, eg. shots
+
+If we look at shots as another example, there is a gap between xG and
+PSxG which is where an intent based model would fit in. xG captures all
+the possibilities in that situation and PSxG captures the final outcome
+from that situation but neither are a good measure of intent. To connect
+intent, wanting to shoot at a particular point on the goal, with a
+particular speed, with a particular trajectory etc. with outcome, the
+final shot properties, we could repeat a similar process as above
+highlighting what sort of errors can be expected in any of those
+properties of intent. For eg. choosing a very high speed shot probably
+causes higher noise in the target point on the goal and therefore the
+intent based PSxG should include other noisy trajectories which consider
+the possibility of a shot being in the neighbourhood of the final shot
+to evaluate how good a decision it was to pick that point.
+
 ## Conclusion
 
 The difference between the expected reward from an intention and an
