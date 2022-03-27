@@ -138,6 +138,8 @@ dtPVDelta[Tag == 'A', PlayerMaxDeltaPVIntentX := -PlayerMaxDeltaPVIntentX]
 dtPVDelta[Tag == 'A', PlayerMaxDeltaPVIntentY := -PlayerMaxDeltaPVIntentY]
 dtPVDelta[Tag == 'A', AttackMaxDeltaPVIntentX := -AttackMaxDeltaPVIntentX]
 dtPVDelta[Tag == 'A', AttackMaxDeltaPVIntentY := -AttackMaxDeltaPVIntentY]
+dtPVDelta[Tag == 'A', NextFrameBallX := -NextFrameBallX]
+dtPVDelta[Tag == 'A', NextFrameBallY := -NextFrameBallY]
 
 ```
 
